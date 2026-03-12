@@ -60,7 +60,7 @@ func (r *Receiver) Run(ctx context.Context) {
 		case <-ctx.Done():
 			r.stopAll()
 			return
-		case <-ticker.C:
+		case <-ticker.Chan():
 			r.reconcile(ctx)
 		}
 	}

@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -34,9 +33,7 @@ func NewSchemaValidator(schemasDir string) *SchemaValidator {
 }
 
 // WarmUp pre-compiles every *.json file in schemasDir and stores the result
-// in the cache. Call this at startup so the first request does not incur
-// compilation overhead. Errors from individual files are collected and
-// returned as a combined error; they do not abort processing of other files.
+// in the cache.
 func (v *SchemaValidator) WarmUp() error {
 	if v.schemasDir == "" {
 		return nil
@@ -44,7 +41,7 @@ func (v *SchemaValidator) WarmUp() error {
 	entries, err := os.ReadDir(v.schemasDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil // schemas dir is optional
+			return nil
 		}
 		return fmt.Errorf("schema warm-up: read dir %s: %w", v.schemasDir, err)
 	}
@@ -66,8 +63,7 @@ func (v *SchemaValidator) WarmUp() error {
 	return nil
 }
 
-// InvalidateCache drops all cached schemas. The next validation request for
-// each schema will recompile from disk. Used by SIGHUP hot reload.
+// InvalidateCache drops all cached schemas.
 func (v *SchemaValidator) InvalidateCache() {
 	v.mu.Lock()
 	v.cached = make(map[string]*jsonschema.Schema)
@@ -75,15 +71,15 @@ func (v *SchemaValidator) InvalidateCache() {
 }
 
 // Validate validates body against the JSON Schema named schemaName.
-// Returns a *dgw.ValidationError with structured field details on failure.
 func (v *SchemaValidator) Validate(schemaName string, body []byte) error {
 	schema, err := v.getSchema(schemaName)
 	if err != nil {
 		return err
 	}
 
-	var inst any
-	if err := jsonschema.UnmarshalJSON(bytes.NewReader(body), &inst); err != nil {
+	// Decode body into a generic interface{} for validation.
+	var inst interface{}
+	if err := json.Unmarshal(body, &inst); err != nil {
 		return fmt.Errorf("schema: unmarshal body: %w", err)
 	}
 

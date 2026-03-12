@@ -13,11 +13,9 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
-	"golang.org/x/net/websocket"
 
 	apgw "github.com/ElioNeto/vyx/core/application/gateway"
 	dgw "github.com/ElioNeto/vyx/core/domain/gateway"
-	"github.com/ElioNeto/vyx/core/domain/ipc"
 )
 
 const defaultMaxBodyBytes = 1 << 20 // 1 MiB
@@ -78,7 +76,7 @@ func New(
 		log:          log,
 	}
 
-	// WebSocket proxy wired from dispatcher dependencies (#19).
+	// WebSocket proxy wired from dispatcher accessors.
 	s.wsProxy = newWSProxy(
 		dispatcher.Routes(),
 		dispatcher.Transport(),
@@ -224,7 +222,6 @@ func (s *Server) writeError(w http.ResponseWriter, err error) {
 		code = http.StatusForbidden
 	case errors.Is(err, dgw.ErrSchemaValidation):
 		code = http.StatusBadRequest
-		// Render the structured ValidationError body if available.
 		var ve *dgw.ValidationError
 		if errors.As(err, &ve) {
 			w.WriteHeader(code)
@@ -246,7 +243,3 @@ func (s *Server) writeError(w http.ResponseWriter, err error) {
 func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%s", d.Round(time.Second))
 }
-
-// Ensure websocket import is used (compiler check).
-var _ = websocket.Handler
-var _ ipc.MessageType = ipc.TypeWSOpen

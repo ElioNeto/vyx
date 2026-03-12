@@ -54,6 +54,18 @@ func NewDispatcher(
 	}
 }
 
+// Routes returns the route map (used by the WebSocket proxy).
+func (d *Dispatcher) Routes() *dgw.RouteMap { return d.routes }
+
+// Transport returns the IPC transport (used by the WebSocket proxy).
+func (d *Dispatcher) Transport() ipc.Transport { return d.transport }
+
+// JWT returns the JWT validator (used by the WebSocket proxy).
+func (d *Dispatcher) JWT() JWTValidator { return d.jwt }
+
+// Timeout returns the dispatch timeout (used by the WebSocket proxy).
+func (d *Dispatcher) Timeout() time.Duration { return d.timeout }
+
 // Dispatch runs the full pipeline: JWT → route → auth → schema → UDS → response.
 func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dgw.GatewayResponse, error) {
 	start := time.Now()
@@ -128,7 +140,6 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 	}
 
 	// 5. Build IPC request payload and forward to worker.
-	// Includes query params (#37), path params (#36), and correlation ID (#40).
 	payload, err := json.Marshal(map[string]any{
 		"method":         req.Method,
 		"path":           req.Path,
