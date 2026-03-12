@@ -13,9 +13,11 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
+	"golang.org/x/net/websocket"
 
 	apgw "github.com/ElioNeto/vyx/core/application/gateway"
 	dgw "github.com/ElioNeto/vyx/core/domain/gateway"
+	"github.com/ElioNeto/vyx/core/domain/ipc"
 )
 
 const defaultMaxBodyBytes = 1 << 20 // 1 MiB
@@ -25,6 +27,7 @@ type Server struct {
 	httpServer   *http.Server
 	dispatcher   *apgw.Dispatcher
 	rateLimiter  *apgw.RateLimiter
+	wsProxy      *wsProxy
 	maxBodyBytes int64
 	log          *zap.Logger
 }
@@ -61,7 +64,7 @@ func DevConfig() Config {
 	return cfg
 }
 
-// New creates a Server wired with a Dispatcher and RateLimiter.
+// New creates a Server wired with a Dispatcher, RateLimiter, and WebSocket proxy.
 func New(
 	cfg Config,
 	dispatcher *apgw.Dispatcher,
@@ -75,12 +78,23 @@ func New(
 		log:          log,
 	}
 
+	// WebSocket proxy wired from dispatcher dependencies (#19).
+	s.wsProxy = newWSProxy(
+		dispatcher.Routes(),
+		dispatcher.Transport(),
+		dispatcher.JWT(),
+		log,
+		dispatcher.Timeout(),
+	)
+
 	mux := http.NewServeMux()
+	// WebSocket routes are served under /ws/* (#19).
+	mux.Handle("/ws/", s.wsProxy)
 	mux.HandleFunc("/", s.handle)
 
 	var handler http.Handler = mux
 
-	// Wrap with h2c handler for HTTP/2 cleartext (dev mode, #43).
+	// Wrap with h2c handler for HTTP/2 cleartext (dev mode).
 	if cfg.H2CEnabled && cfg.TLSCertFile == "" {
 		h2s := &http2.Server{}
 		handler = h2c.NewHandler(mux, h2s)
@@ -90,11 +104,11 @@ func New(
 		Addr:         cfg.Addr,
 		Handler:      handler,
 		ReadTimeout:  cfg.ReadTimeout,
-		WriteTimeout: cfg.WriteTimeout,
+		WriteTimeout: 0, // 0 = no write deadline for WebSocket long-lived connections
 		IdleTimeout:  cfg.IdleTimeout,
 	}
 
-	// Configure HTTP/2 over TLS (#43).
+	// Configure HTTP/2 over TLS.
 	if cfg.TLSCertFile != "" {
 		if err := http2.ConfigureServer(s.httpServer, &http2.Server{}); err != nil {
 			log.Warn("http2.ConfigureServer failed", zap.Error(err))
@@ -130,8 +144,14 @@ func (s *Server) Addr() string {
 	return s.httpServer.Addr
 }
 
-// handle is the single entry-point handler for all requests.
+// handle is the single entry-point handler for regular HTTP requests.
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
+	// Detect WebSocket upgrades and hand off to the proxy (#19).
+	if isWebSocketUpgrade(r) {
+		s.wsProxy.ServeHTTP(w, r)
+		return
+	}
+
 	if !s.rateLimiter.AllowIP(r.RemoteAddr) {
 		http.Error(w, "too many requests", http.StatusTooManyRequests)
 		return
@@ -204,6 +224,14 @@ func (s *Server) writeError(w http.ResponseWriter, err error) {
 		code = http.StatusForbidden
 	case errors.Is(err, dgw.ErrSchemaValidation):
 		code = http.StatusBadRequest
+		// Render the structured ValidationError body if available.
+		var ve *dgw.ValidationError
+		if errors.As(err, &ve) {
+			w.WriteHeader(code)
+			_ = json.NewEncoder(w).Encode(ve)
+			s.log.Warn("gateway validation error", zap.Int("status", code), zap.Error(err))
+			return
+		}
 	case errors.Is(err, dgw.ErrPayloadTooLarge):
 		code = http.StatusRequestEntityTooLarge
 	case errors.Is(err, dgw.ErrUpstreamTimeout):
@@ -218,3 +246,7 @@ func (s *Server) writeError(w http.ResponseWriter, err error) {
 func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%s", d.Round(time.Second))
 }
+
+// Ensure websocket import is used (compiler check).
+var _ = websocket.Handler
+var _ ipc.MessageType = ipc.TypeWSOpen

@@ -138,6 +138,27 @@ func (s *Service) MarkUnhealthy(ctx context.Context, id string) error {
 	return s.repo.Save(ctx, w)
 }
 
+// MarkRunning transitions a worker from StateStarting to StateRunning after
+// a successful handshake (#18). Safe to call on an already-running worker.
+func (s *Service) MarkRunning(ctx context.Context, id string) error {
+	w, err := s.repo.FindByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if w == nil {
+		return worker.ErrNotFound
+	}
+
+	if w.State == worker.StateRunning {
+		return nil // idempotent
+	}
+
+	w.State = worker.StateRunning
+	w.UpdatedAt = time.Now()
+	s.publish(ctx, worker.EventRunning, w, "handshake complete")
+	return s.repo.Save(ctx, w)
+}
+
 // RestartWorker stops and re-spawns a worker (called by the monitor after backoff).
 func (s *Service) RestartWorker(ctx context.Context, id string) error {
 	w, err := s.repo.FindByID(ctx, id)
