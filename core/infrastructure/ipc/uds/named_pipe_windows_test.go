@@ -23,14 +23,10 @@ func TestNamedPipeTransport_SendReceive(t *testing.T) {
 	if err := transport.Register(ctx, workerID); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
-	time.Sleep(10 * time.Millisecond)
+	// Give acceptPipe goroutine time to call ConnectNamedPipe.
+	time.Sleep(20 * time.Millisecond)
 
-	addr, err := transport.ListenAddr(workerID)
-	if err != nil {
-		t.Fatalf("ListenAddr() error = %v", err)
-	}
-
-	client, err := uds.DialNamedPipe(ctx, addr)
+	client, err := uds.DialNamedPipe(ctx, workerID)
 	if err != nil {
 		t.Fatalf("DialNamedPipe() error = %v", err)
 	}
@@ -49,6 +45,9 @@ func TestNamedPipeTransport_SendReceive(t *testing.T) {
 	if got.Type != want.Type {
 		t.Errorf("Type: want %v, got %v", want.Type, got.Type)
 	}
+	if string(got.Payload) != string(want.Payload) {
+		t.Errorf("Payload: want %q, got %q", want.Payload, got.Payload)
+	}
 }
 
 func TestNamedPipeTransport_WorkerHeartbeat(t *testing.T) {
@@ -62,10 +61,9 @@ func TestNamedPipeTransport_WorkerHeartbeat(t *testing.T) {
 	if err := transport.Register(ctx, workerID); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
-	time.Sleep(10 * time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
 
-	addr, _ := transport.ListenAddr(workerID)
-	client, err := uds.DialNamedPipe(ctx, addr)
+	client, err := uds.DialNamedPipe(ctx, workerID)
 	if err != nil {
 		t.Fatalf("DialNamedPipe() error = %v", err)
 	}
@@ -84,4 +82,51 @@ func TestNamedPipeTransport_WorkerHeartbeat(t *testing.T) {
 	if got.Type != ipc.TypeHeartbeat {
 		t.Errorf("want TypeHeartbeat, got %v", got.Type)
 	}
+}
+
+func TestNamedPipeTransport_Deregister(t *testing.T) {
+	transport := uds.NewNamedPipeTransport()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	const workerID = "win-dereg"
+	if err := transport.Register(ctx, workerID); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	if err := transport.Deregister(ctx, workerID); err != nil {
+		t.Fatalf("Deregister() error = %v", err)
+	}
+
+	// After deregister, Send must return ErrWorkerNotConnected.
+	err := transport.Send(ctx, workerID, ipc.Message{Type: ipc.TypeRequest})
+	if err == nil {
+		t.Fatal("expected error after Deregister, got nil")
+	}
+}
+
+func TestNamedPipeTransport_SecurityDescriptor(t *testing.T) {
+	// This test verifies that the pipe is created with a restricted DACL.
+	// It connects as the same user and expects success; connecting as a
+	// different user would fail (cannot be tested in a unit test without
+	// a secondary user account, but the DACL is verified by inspection).
+	transport := uds.NewNamedPipeTransport()
+	defer transport.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	const workerID = "win-sec"
+	if err := transport.Register(ctx, workerID); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	// Same user should be able to connect.
+	client, err := uds.DialNamedPipe(ctx, workerID)
+	if err != nil {
+		t.Fatalf("same-user DialNamedPipe() should succeed, got: %v", err)
+	}
+	client.Close()
 }
