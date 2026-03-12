@@ -58,3 +58,15 @@ func (r *MemoryWorkerRepository) Delete(_ context.Context, id string) error {
 	delete(r.workers, id)
 	return nil
 }
+
+// LiveWorkerIDs returns the IDs of all workers currently in the repository.
+// Satisfies the heartbeat.WorkerLister interface.
+func (r *MemoryWorkerRepository) LiveWorkerIDs(_ context.Context) ([]string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	ids := make([]string, 0, len(r.workers))
+	for id := range r.workers {
+		ids = append(ids, id)
+	}
+	return ids, nil
+}

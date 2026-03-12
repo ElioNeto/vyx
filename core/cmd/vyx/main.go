@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -79,7 +80,7 @@ Usage:
   vyx help          Show this help`)
 }
 
-// ─── vyx new ────────────────────────────────────────────────────────────────
+// ─── vyx new ──────────────────────────────────────────────────────────────────────
 
 func cmdNew(name string) {
 	if err := os.MkdirAll(name, 0755); err != nil {
@@ -122,7 +123,7 @@ func cmdNew(name string) {
 	fmt.Printf("✓ Project %q created.\n  Next: cd %s && vyx dev\n", name, name)
 }
 
-// ─── vyx build ──────────────────────────────────────────────────────────────
+// ─── vyx build ────────────────────────────────────────────────────────────────────
 
 func cmdBuild() {
 	cfg := mustLoadConfig()
@@ -147,7 +148,7 @@ func cmdBuild() {
 	fmt.Printf("✓ route_map.json written to %s\n", output)
 }
 
-// ─── vyx annotate ───────────────────────────────────────────────────────────
+// ─── vyx annotate ───────────────────────────────────────────────────────────────────
 
 func cmdAnnotate() {
 	cfg := mustLoadConfig()
@@ -180,19 +181,7 @@ func cmdAnnotate() {
 }
 
 // runAnnotateCmd invokes the vyx annotation scanner via os/exec.
-//
-// Strategy: shell out to `go run github.com/ElioNeto/vyx/cmd/annotate` so
-// that the core module does not need a direct import of the scanner module.
-// This keeps the core's dependency graph clean and avoids replace-directive
-// coupling between the two modules.
-//
-// Flags forwarded to cmd/annotate:
-//
-//	--go-dir   <dir>    directory containing Go source files with @Route annotations
-//	--ts-dir   <dir>    directory containing TypeScript/JavaScript files with @Route annotations
-//	--output   <file>   path where route_map.json will be written
 func runAnnotateCmd(goDir, tsDir, output string) error {
-	// Build argument list.
 	args := []string{
 		"run", "github.com/ElioNeto/vyx/cmd/annotate",
 		"--output", output,
@@ -209,7 +198,6 @@ func runAnnotateCmd(goDir, tsDir, output string) error {
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		// Provide a helpful hint when the scanner binary is not installed.
 		var exitErr *exec.ExitError
 		if strings.Contains(err.Error(), "no required module") ||
 			(func() bool {
@@ -225,7 +213,7 @@ func runAnnotateCmd(goDir, tsDir, output string) error {
 	return nil
 }
 
-// ─── vyx dev / vyx start ─────────────────────────────────────────────────────
+// ─── vyx dev / vyx start ──────────────────────────────────────────────────────────────────
 
 func runServer(devMode bool) {
 	var log *zap.Logger
@@ -330,7 +318,7 @@ func runServer(devMode bool) {
 	// --- Heartbeat sender (core → worker) ---
 	hbSender := heartbeat.NewSender(transport, repo, hbCfg, log)
 
-	// --- Heartbeat receiver (worker → core) (#49) ---
+	// --- Heartbeat receiver (worker → core) ---
 	hbReceiver := heartbeat.NewReceiver(transport, repo, service, hbCfg, log)
 
 	// --- Context + signal handling ---
@@ -395,7 +383,7 @@ func runServer(devMode bool) {
 				zap.Int("replica", i),
 			)
 
-			// Start the worker→core heartbeat read loop immediately (#49).
+			// Start the worker→core heartbeat read loop immediately.
 			hbReceiver.StartLoop(ctx, w.ID)
 		}
 	}
@@ -404,7 +392,7 @@ func runServer(devMode bool) {
 	go healthMonitor.Run(ctx)
 	go cfgLoader.WatchSIGHUP(ctx)
 	go hbSender.Run(ctx)
-	go hbReceiver.Run(ctx) // reconciles any workers added after startup
+	go hbReceiver.Run(ctx)
 
 	// Start HTTP server.
 	go func() {
@@ -438,7 +426,7 @@ func runServer(devMode bool) {
 	log.Info("vyx core stopped cleanly")
 }
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
+// ─── helpers ──────────────────────────────────────────────────────────────────────
 
 func mustLoadConfig() *doamincfg.Config {
 	log, _ := zap.NewProduction()
