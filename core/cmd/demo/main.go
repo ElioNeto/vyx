@@ -28,34 +28,32 @@ import (
 	"github.com/ElioNeto/vyx/core/application/lifecycle"
 	"github.com/ElioNeto/vyx/core/application/monitor"
 	"github.com/ElioNeto/vyx/core/domain/ipc"
+	"github.com/ElioNeto/vyx/core/domain/worker"
 	"github.com/ElioNeto/vyx/core/infrastructure/ipc/uds"
 	"github.com/ElioNeto/vyx/core/infrastructure/repository"
 )
 
 // ──────────────────────────────────────────────────────────────────────────────
-// fakeProcessManager: satisfies worker.Manager without spawning real processes.
-// The actual "worker" runs as a goroutine started by the demo itself.
+// noopManager: satisfaz worker.Manager sem spawnar processo real.
 // ──────────────────────────────────────────────────────────────────────────────
 
-type fakeProcessManager struct {
-	transport   ipc.Transport
-	workerLoop  func(ctx context.Context, workerID string, crash <-chan struct{})
-	crashCh     chan struct{}
-	workerCancel context.CancelFunc
-}
+type noopManager struct{}
 
-func newFakeManager(transport ipc.Transport, workerLoop func(context.Context, string, <-chan struct{})) *fakeProcessManager {
-	return &fakeProcessManager{
-		transport:  transport,
-		workerLoop: workerLoop,
-		crashCh:    make(chan struct{}),
-	}
-}
+func (n *noopManager) Spawn(_ context.Context, _ *worker.Worker) error  { return nil }
+func (n *noopManager) Stop(_ context.Context, _ string) error           { return nil }
+func (n *noopManager) StopAll(_ context.Context) error                  { return nil }
+func (n *noopManager) SendHeartbeat(_ context.Context, _ string) error  { return nil }
 
-func (m *fakeProcessManager) Spawn(ctx context.Context, w interface{ GetID() string }) error { return nil }
-func (m *fakeProcessManager) Stop(_ context.Context, _ string) error                         { return nil }
-func (m *fakeProcessManager) StopAll(_ context.Context) error                                { return nil }
-func (m *fakeProcessManager) SendHeartbeat(_ context.Context, _ string) error               { return nil }
+// ──────────────────────────────────────────────────────────────────────────────
+// printPublisher: imprime eventos de lifecycle no terminal com cores.
+// ──────────────────────────────────────────────────────────────────────────────
+
+type printPublisher struct{ log *zap.Logger }
+
+func (p *printPublisher) Publish(_ context.Context, e worker.Event) {
+	p.log.Info(fmt.Sprintf("[EVENT] %-20s worker=%-20s state=%-12s %s",
+		e.Type, e.WorkerID, e.State, e.Details))
+}
 
 // ──────────────────────────────────────────────────────────────────────────────
 // main
@@ -106,7 +104,7 @@ func main() {
 
 	// ── Heartbeat loop do core (lê mensagens do worker) ────────────────
 	hbCfg := heartbeat.DefaultConfig()
-	hbCfg.Interval = 3 * time.Second   // demo: timeout de 3s (prod é 5s)
+	hbCfg.Interval = 3 * time.Second // demo: timeout de 3s (prod é 5s)
 	hbCfg.MissedThreshold = 2
 	hbLoop := heartbeat.New(workerID, transport, service, hbCfg, log)
 	go hbLoop.Run(ctx)
@@ -172,33 +170,11 @@ func runWorker(ctx context.Context, workerID string, transport ipc.Transport, lo
 	}
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// printPublisher: imprime eventos de lifecycle no terminal com cores.
-// ──────────────────────────────────────────────────────────────────────────────
-
-type printPublisher struct{ log *zap.Logger }
-
-func (p *printPublisher) Publish(_ context.Context, e interface{ GetType() string; GetWorkerID() string; GetState() string; GetDetails() string }) {
-	p.log.Info(fmt.Sprintf("[EVENT] %-12s worker=%-20s state=%-12s %s",
-		e.GetType(), e.GetWorkerID(), e.GetState(), e.GetDetails()))
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
-// noopManager: satisfaz worker.Manager sem spawnar processo real.
-// ──────────────────────────────────────────────────────────────────────────────
-
-type noopManager struct{}
-
-func (n *noopManager) Spawn(_ context.Context, _ interface{}) error         { return nil }
-func (n *noopManager) Stop(_ context.Context, _ string) error               { return nil }
-func (n *noopManager) StopAll(_ context.Context) error                      { return nil }
-func (n *noopManager) SendHeartbeat(_ context.Context, _ string) error      { return nil }
-
 func banner() {
 	fmt.Println()
 	fmt.Println("  ┌───────────────────────────────────────────────────────┐")
-	fmt.Println("  │       vyx — IPC Demo (Phase 1)                     │")
-	fmt.Println("  │  Named Pipes • Heartbeat • Lifecycle • Monitor     │")
+	fmt.Println("  │       vyx — IPC Demo (Phase 1)                        │")
+	fmt.Println("  │  Named Pipes • Heartbeat • Lifecycle • Monitor        │")
 	fmt.Println("  └───────────────────────────────────────────────────────┘")
 	fmt.Println("  Cenario:")
 	fmt.Println("  [0s]  worker conecta e envia heartbeats a cada 2s")
