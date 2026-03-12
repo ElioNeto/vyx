@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/ElioNeto/vyx/core/domain/worker"
@@ -38,7 +37,7 @@ func (m *Manager) Spawn(ctx context.Context, w *worker.Worker) error {
 	cmd := exec.CommandContext(ctx, w.Command, w.Args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setProcAttr(cmd) // platform-specific: Setpgid on Unix, CREATE_NEW_PROCESS_GROUP on Windows
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("%w: %s", worker.ErrSpawnFailed, err.Error())
@@ -56,8 +55,8 @@ func (m *Manager) Spawn(ctx context.Context, w *worker.Worker) error {
 	return nil
 }
 
-// Stop sends SIGTERM to the worker process and waits for it to exit.
-// Falls back to SIGKILL after the shutdown timeout.
+// Stop sends a termination signal to the worker process and waits for it to exit.
+// Falls back to kill after the shutdown timeout.
 func (m *Manager) Stop(ctx context.Context, id string) error {
 	m.mu.RLock()
 	cmd, ok := m.processes[id]
@@ -67,7 +66,7 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 		return worker.ErrNotFound
 	}
 
-	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+	if err := stopProcess(cmd); err != nil {
 		return err
 	}
 
@@ -80,7 +79,7 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 	select {
 	case <-done:
 	case <-time.After(defaultShutdownTimeout):
-		_ = cmd.Process.Signal(syscall.SIGKILL)
+		_ = killProcess(cmd)
 		return worker.ErrStopTimeout
 	}
 
