@@ -20,11 +20,11 @@ const defaultMaxBodyBytes = 1 << 20 // 1 MiB default; overridden via WithMaxBody
 // Server is the HTTP gateway that exposes the vyx core to the outside world.
 // It supports HTTP/1.1 and HTTP/2 (via net/http's built-in H2 support).
 type Server struct {
-	httpServer  *http.Server
-	dispatcher  *apgw.Dispatcher
-	rateLimiter *apgw.RateLimiter
+	httpServer   *http.Server
+	dispatcher   *apgw.Dispatcher
+	rateLimiter  *apgw.RateLimiter
 	maxBodyBytes int64
-	log         *zap.Logger
+	log          *zap.Logger
 }
 
 // Config holds the HTTP server configuration.
@@ -116,10 +116,19 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Parse query string parameters (#37).
+	queryParams := make(map[string]string, len(r.URL.Query()))
+	for k, vs := range r.URL.Query() {
+		if len(vs) > 0 {
+			queryParams[k] = vs[0]
+		}
+	}
+
 	req := &dgw.GatewayRequest{
 		Method:  r.Method,
 		Path:    r.URL.Path,
 		Headers: headers,
+		Query:   queryParams,
 		Body:    body,
 	}
 
