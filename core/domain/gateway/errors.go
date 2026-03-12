@@ -1,18 +1,60 @@
 package gateway
 
-import "errors"
-
-var (
-	// ErrRouteNotFound is returned when no route matches the request.
-	ErrRouteNotFound = errors.New("gateway: route not found")
-	// ErrUnauthorized is returned when the JWT is missing or invalid.
-	ErrUnauthorized = errors.New("gateway: unauthorized")
-	// ErrForbidden is returned when the caller lacks a required role.
-	ErrForbidden = errors.New("gateway: forbidden")
-	// ErrPayloadTooLarge is returned when the request body exceeds the limit.
-	ErrPayloadTooLarge = errors.New("gateway: payload too large")
-	// ErrSchemaValidation is returned when the request body fails JSON Schema validation.
-	ErrSchemaValidation = errors.New("gateway: request body failed schema validation")
-	// ErrUpstreamTimeout is returned when the worker does not respond in time.
-	ErrUpstreamTimeout = errors.New("gateway: upstream worker timed out")
+import (
+	"encoding/json"
+	"errors"
+	"strings"
 )
+
+// Sentinel errors used by the gateway pipeline.
+var (
+	ErrRouteNotFound   = errors.New("route not found")
+	ErrUnauthorized    = errors.New("unauthorized")
+	ErrForbidden       = errors.New("forbidden")
+	ErrSchemaValidation = errors.New("validation failed")
+	ErrPayloadTooLarge = errors.New("payload too large")
+	ErrUpstreamTimeout = errors.New("upstream timeout")
+)
+
+// ValidationDetail holds a single field-level validation failure.
+// It is part of the structured 400 response body (spec §4.3).
+type ValidationDetail struct {
+	Field   string `json:"field"`
+	Message string `json:"message"`
+}
+
+// ValidationError is a structured error returned by the SchemaValidator.
+// It implements the error interface and marshals to the spec §4.3 format:
+//
+//	{"error":"validation_failed","details":[{"field":"email","message":"..."}]}
+type ValidationError struct {
+	Details []ValidationDetail `json:"details"`
+}
+
+func (e *ValidationError) Error() string {
+	msgs := make([]string, 0, len(e.Details))
+	for _, d := range e.Details {
+		if d.Field != "" {
+			msgs = append(msgs, d.Field+": "+d.Message)
+		} else {
+			msgs = append(msgs, d.Message)
+		}
+	}
+	return "validation failed: " + strings.Join(msgs, "; ")
+}
+
+// MarshalJSON renders the spec-compliant response body.
+func (e *ValidationError) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Error   string             `json:"error"`
+		Details []ValidationDetail `json:"details"`
+	}{
+		Error:   "validation_failed",
+		Details: e.Details,
+	})
+}
+
+// Is makes ValidationError unwrappable via errors.Is(err, ErrSchemaValidation).
+func (e *ValidationError) Is(target error) bool {
+	return target == ErrSchemaValidation
+}

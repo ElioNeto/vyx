@@ -13,6 +13,13 @@ type RouteMap struct {
 
 // Generate collects routes from the given backend and frontend directories
 // and writes the result to outputPath (typically route_map.json).
+//
+// Parameters:
+//
+//	goDir       — directory containing Go source files with @Route annotations (may be empty)
+//	tsDir       — directory containing TypeScript/JS backend files (may be empty)
+//	frontendDir — directory containing React TSX files with @Page/@Auth annotations (#16)
+//	outputPath  — file path where route_map.json will be written
 func Generate(goDir, tsDir, frontendDir, outputPath string) ([]AnnotationError, error) {
 	var allRoutes []Route
 	var allErrs []AnnotationError
@@ -29,8 +36,9 @@ func Generate(goDir, tsDir, frontendDir, outputPath string) ([]AnnotationError, 
 		allErrs = append(allErrs, errs...)
 	}
 
+	// #16: scan React TSX frontend pages.
 	if frontendDir != "" {
-		routes, errs := ParseTSFiles(frontendDir, "node:frontend")
+		routes, errs := ParseTSXFiles(frontendDir, "node:ssr")
 		allRoutes = append(allRoutes, routes...)
 		allErrs = append(allErrs, errs...)
 	}
