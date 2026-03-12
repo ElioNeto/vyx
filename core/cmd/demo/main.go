@@ -34,7 +34,7 @@ import (
 )
 
 // ──────────────────────────────────────────────────────────────────────────────
-// noopManager: satisfaz worker.Manager sem spawnar processo real.
+// noopManager: satisfies worker.Manager without spawning a real process.
 // ──────────────────────────────────────────────────────────────────────────────
 
 type noopManager struct{}
@@ -45,7 +45,7 @@ func (n *noopManager) StopAll(_ context.Context) error                  { return
 func (n *noopManager) SendHeartbeat(_ context.Context, _ string) error  { return nil }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// printPublisher: imprime eventos de lifecycle no terminal com cores.
+// printPublisher: prints lifecycle events to the terminal with colors.
 // ──────────────────────────────────────────────────────────────────────────────
 
 type printPublisher struct{ log *zap.Logger }
@@ -60,7 +60,7 @@ func (p *printPublisher) Publish(_ context.Context, e worker.Event) {
 // ──────────────────────────────────────────────────────────────────────────────
 
 func main() {
-	// ── Logger com output human-readable ─────────────────────────────────────
+	// ── Logger with human-readable output ────────────────────────────────────
 	cfg := zap.NewDevelopmentConfig()
 	cfg.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
 	cfg.EncoderConfig.EncodeTime = func(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
@@ -71,46 +71,46 @@ func main() {
 
 	banner()
 
-	// ── Context principal ───────────────────────────────────────────────
+	// ── Main context ────────────────────────────────────────────────────
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	const workerID = "demo-worker-1"
 
-	// ── Transport (Named Pipe no Windows, UDS no Unix) ────────────────────
+	// ── Transport (Named Pipe on Windows, UDS on Unix) ──────────────────
 	transport := uds.PlatformTransport()
-	log.Info("[CORE] transport iniciado", zap.String("tipo", transportName()))
+	log.Info("[CORE] transport started", zap.String("type", transportName()))
 
 	if err := transport.Register(ctx, workerID); err != nil {
-		log.Fatal("[CORE] falha ao registrar socket", zap.Error(err))
+		log.Fatal("[CORE] failed to register socket", zap.Error(err))
 	}
-	log.Info("[CORE] socket criado", zap.String("worker", workerID))
+	log.Info("[CORE] socket created", zap.String("worker", workerID))
 
-	// ── Infraestrutura de lifecycle ──────────────────────────────────
+	// ── Lifecycle infrastructure ──────────────────────────────────────
 	repo := repository.NewMemoryWorkerRepository()
 	publisher := &printPublisher{log: log}
 	manager := &noopManager{}
 	service := lifecycle.NewService(repo, manager, publisher)
 
-	// Registra o worker manualmente no repositório (normalmente feito pelo SpawnWorker).
+	// Manually registers the worker in the repository (usually done by SpawnWorker).
 	_, err := service.SpawnWorker(ctx, workerID, "<demo-goroutine>", nil)
 	if err != nil {
 		log.Fatal("SpawnWorker failed", zap.Error(err))
 	}
 
-	// ── Monitor de saúde ───────────────────────────────────────────────
+	// ── Health monitor ────────────────────────────────────────────────
 	healthMonitor := monitor.New(service, repo)
 	go healthMonitor.Run(ctx)
 
-	// ── Heartbeat loop do core (lê mensagens do worker) ────────────────
+	// ── Core heartbeat loop (reads messages from the worker) ──────────
 	hbCfg := heartbeat.DefaultConfig()
-	hbCfg.Interval = 3 * time.Second // demo: timeout de 3s (prod é 5s)
+	hbCfg.Interval = 3 * time.Second // demo: 3s timeout (prod is 5s)
 	hbCfg.MissedThreshold = 2
 	hbLoop := heartbeat.New(workerID, transport, service, hbCfg, log)
 	go hbLoop.Run(ctx)
 
-	// ── Worker simulado em goroutine ─────────────────────────────────
-	// Aguarda o socket ficar pronto antes de conectar.
+	// ── Simulated worker in goroutine ───────────────────────────────
+	// Wait for the socket to be ready before connecting.
 	time.Sleep(50 * time.Millisecond)
 
 	workerCtx, workerCancel := context.WithCancel(ctx)
@@ -118,12 +118,12 @@ func main() {
 
 	go runWorker(workerCtx, workerID, transport, log, crashCh)
 
-	// ── Cenário do demo ─────────────────────────────────────────────
+	// ── Demo scenario ───────────────────────────────────────────────
 	go func() {
-		// Após 8s simula crash: para de enviar heartbeats
+		// Simulates a crash after 8s: stops sending heartbeats
 		select {
 		case <-time.After(8 * time.Second):
-			log.Warn("[DEMO] simulando crash do worker — heartbeats vão parar")
+			log.Warn("[DEMO] simulating worker crash — heartbeats will stop")
 			close(crashCh)
 			workerCancel()
 		case <-ctx.Done():
@@ -131,24 +131,24 @@ func main() {
 		}
 	}()
 
-	// ── Aguarda sinal de encerramento ───────────────────────────────
+	// ── Wait for shutdown signal ────────────────────────────────────
 	<-ctx.Done()
-	log.Info("[CORE] encerrando graciosamente…")
+	log.Info("[CORE] shutting down gracefully…")
 	_ = service.StopAll(context.Background())
-	log.Info("[CORE] encerrado")
+	log.Info("[CORE] shut down")
 }
 
-// runWorker simula o lado do worker: conecta ao pipe/socket e envia heartbeats.
+// runWorker simulates the worker side: connects to the pipe/socket and sends heartbeats.
 func runWorker(ctx context.Context, workerID string, transport ipc.Transport, log *zap.Logger, crashCh <-chan struct{}) {
 	time.Sleep(30 * time.Millisecond)
 
 	client, err := dialPlatform(ctx, workerID)
 	if err != nil {
-		log.Error("[WORKER] falha ao conectar", zap.Error(err))
+		log.Error("[WORKER] failed to connect", zap.Error(err))
 		return
 	}
 	defer client.Close()
-	log.Info("[WORKER] conectado ao core via " + transportName())
+	log.Info("[WORKER] connected to core via " + transportName())
 
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -156,16 +156,16 @@ func runWorker(ctx context.Context, workerID string, transport ipc.Transport, lo
 	for {
 		select {
 		case <-crashCh:
-			log.Warn("[WORKER] crash — encerrando goroutine do worker")
+			log.Warn("[WORKER] crash — terminating worker goroutine")
 			return
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			if err := client.Send(ipc.Message{Type: ipc.TypeHeartbeat}); err != nil {
-				log.Error("[WORKER] erro ao enviar heartbeat", zap.Error(err))
+				log.Error("[WORKER] error sending heartbeat", zap.Error(err))
 				return
 			}
-			log.Debug("[WORKER] ♥ heartbeat enviado")
+			log.Debug("[WORKER] ♥ heartbeat sent")
 		}
 	}
 }
@@ -176,11 +176,11 @@ func banner() {
 	fmt.Println("  │       vyx — IPC Demo (Phase 1)                        │")
 	fmt.Println("  │  Named Pipes • Heartbeat • Lifecycle • Monitor        │")
 	fmt.Println("  └───────────────────────────────────────────────────────┘")
-	fmt.Println("  Cenario:")
-	fmt.Println("  [0s]  worker conecta e envia heartbeats a cada 2s")
-	fmt.Println("  [8s]  worker simula crash (para de enviar heartbeats)")
-	fmt.Println("  [~14s] core detecta 2 heartbeats perdidos -> unhealthy")
-	fmt.Println("  [~15s] monitor dispara restart automatico")
-	fmt.Println("  Ctrl+C para encerrar a qualquer momento")
+	fmt.Println("  Scenario:")
+	fmt.Println("[0s]   worker connects and sends heartbeats every 2s")
+	fmt.Println("  [8s]   worker simulates crash (stops sending heartbeats)")
+	fmt.Println("  [~14s] core detects 2 missed heartbeats -> unhealthy")
+	fmt.Println("  [~15s] monitor triggers automatic restart")
+	fmt.Println("  Press Ctrl+C to stop at any time")
 	fmt.Println()
 }
