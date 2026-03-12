@@ -1,0 +1,33 @@
+project:
+  name: hello-world
+  version: 0.1.0
+
+workers:
+  - id: go:api
+    command: go run ./workers/go/main.go
+    replicas: 1
+    strategy: round-robin
+    startup_timeout: 10s
+    shutdown_timeout: 5s
+
+  - id: node:api
+    command: node workers/node/worker.js
+    replicas: 1
+    strategy: round-robin
+    startup_timeout: 10s
+    shutdown_timeout: 5s
+
+security:
+  jwt_secret_env: JWT_SECRET
+  rate_limit:
+    per_ip: 100
+    per_token: 500
+  payload_max_size: 1mb
+  global_timeout: 30s
+
+ipc:
+  socket_dir: /tmp/vyx
+
+build:
+  schemas_dir: ./schemas
+  route_map_output: ./route_map.json

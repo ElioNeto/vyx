@@ -1,0 +1,36 @@
+{
+  "routes": [
+    {
+      "path": "/api/hello",
+      "method": "GET",
+      "workerID": "go:api",
+      "authRoles": ["guest", "user"],
+      "validate": "",
+      "type": "api"
+    },
+    {
+      "path": "/api/greet",
+      "method": "POST",
+      "workerID": "go:api",
+      "authRoles": ["user"],
+      "validate": "greet",
+      "type": "api"
+    },
+    {
+      "path": "/api/products",
+      "method": "GET",
+      "workerID": "node:api",
+      "authRoles": ["guest", "user"],
+      "validate": "",
+      "type": "api"
+    },
+    {
+      "path": "/api/products/:id",
+      "method": "GET",
+      "workerID": "node:api",
+      "authRoles": ["user"],
+      "validate": "",
+      "type": "api"
+    }
+  ]
+}
