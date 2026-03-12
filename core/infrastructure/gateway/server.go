@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,15 +11,16 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 
 	apgw "github.com/ElioNeto/vyx/core/application/gateway"
 	dgw "github.com/ElioNeto/vyx/core/domain/gateway"
 )
 
-const defaultMaxBodyBytes = 1 << 20 // 1 MiB default; overridden via WithMaxBodyBytes
+const defaultMaxBodyBytes = 1 << 20 // 1 MiB
 
-// Server is the HTTP gateway that exposes the vyx core to the outside world.
-// It supports HTTP/1.1 and HTTP/2 (via net/http's built-in H2 support).
+// Server is the HTTP gateway supporting HTTP/1.1, HTTP/2 (TLS) and h2c (cleartext).
 type Server struct {
 	httpServer   *http.Server
 	dispatcher   *apgw.Dispatcher
@@ -29,11 +31,16 @@ type Server struct {
 
 // Config holds the HTTP server configuration.
 type Config struct {
-	Addr         string        // e.g. ":8080"
+	Addr         string
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
 	IdleTimeout  time.Duration
 	MaxBodyBytes int64
+	// TLS fields — both must be set to enable TLS + H2.
+	TLSCertFile string
+	TLSKeyFile  string
+	// H2CEnabled enables HTTP/2 cleartext (development mode).
+	H2CEnabled bool
 }
 
 // DefaultConfig returns production-safe HTTP server defaults.
@@ -45,6 +52,13 @@ func DefaultConfig() Config {
 		IdleTimeout:  60 * time.Second,
 		MaxBodyBytes: defaultMaxBodyBytes,
 	}
+}
+
+// DevConfig returns a development config with h2c enabled and verbose defaults.
+func DevConfig() Config {
+	cfg := DefaultConfig()
+	cfg.H2CEnabled = true
+	return cfg
 }
 
 // New creates a Server wired with a Dispatcher and RateLimiter.
@@ -64,20 +78,46 @@ func New(
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handle)
 
+	var handler http.Handler = mux
+
+	// Wrap with h2c handler for HTTP/2 cleartext (dev mode, #43).
+	if cfg.H2CEnabled && cfg.TLSCertFile == "" {
+		h2s := &http2.Server{}
+		handler = h2c.NewHandler(mux, h2s)
+	}
+
 	s.httpServer = &http.Server{
 		Addr:         cfg.Addr,
-		Handler:      mux,
+		Handler:      handler,
 		ReadTimeout:  cfg.ReadTimeout,
 		WriteTimeout: cfg.WriteTimeout,
 		IdleTimeout:  cfg.IdleTimeout,
 	}
 
+	// Configure HTTP/2 over TLS (#43).
+	if cfg.TLSCertFile != "" {
+		if err := http2.ConfigureServer(s.httpServer, &http2.Server{}); err != nil {
+			log.Warn("http2.ConfigureServer failed", zap.Error(err))
+		}
+		s.httpServer.TLSConfig = &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			NextProtos: []string{"h2", "http/1.1"},
+		}
+	}
+
 	return s
 }
 
-// ListenAndServe starts the HTTP server. It blocks until the server stops.
+// ListenAndServe starts the HTTP/1.1 (or h2c) server. Blocks until stopped.
 func (s *Server) ListenAndServe() error {
+	s.log.Info("HTTP server listening", zap.String("addr", s.httpServer.Addr))
 	return s.httpServer.ListenAndServe()
+}
+
+// ListenAndServeTLS starts an HTTPS server with H2 over ALPN. Blocks until stopped.
+func (s *Server) ListenAndServeTLS(certFile, keyFile string) error {
+	s.log.Info("HTTPS/H2 server listening", zap.String("addr", s.httpServer.Addr))
+	return s.httpServer.ListenAndServeTLS(certFile, keyFile)
 }
 
 // Shutdown gracefully drains active connections.
@@ -85,22 +125,23 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.httpServer.Shutdown(ctx)
 }
 
+// Addr returns the address the server listens on.
+func (s *Server) Addr() string {
+	return s.httpServer.Addr
+}
+
 // handle is the single entry-point handler for all requests.
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
-	// Rate limit by IP.
 	if !s.rateLimiter.AllowIP(r.RemoteAddr) {
 		http.Error(w, "too many requests", http.StatusTooManyRequests)
 		return
 	}
-
-	// Rate limit by token (best-effort; token validation happens downstream).
 	token := r.Header.Get("Authorization")
 	if !s.rateLimiter.AllowToken(token) {
 		http.Error(w, "too many requests", http.StatusTooManyRequests)
 		return
 	}
 
-	// Enforce payload size limit.
 	r.Body = http.MaxBytesReader(w, r.Body, s.maxBodyBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -108,7 +149,6 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Flatten headers.
 	headers := make(map[string]string, len(r.Header))
 	for k, vs := range r.Header {
 		if len(vs) > 0 {
@@ -116,7 +156,6 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Parse query string parameters (#37).
 	queryParams := make(map[string]string, len(r.URL.Query()))
 	for k, vs := range r.URL.Query() {
 		if len(vs) > 0 {
@@ -138,14 +177,12 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply security headers.
 	for k, v := range apgw.SecurityHeaders() {
 		w.Header().Set(k, v)
 	}
 	for k, v := range resp.Headers {
 		w.Header().Set(k, v)
 	}
-
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(resp.Body)
@@ -175,19 +212,9 @@ func (s *Server) writeError(w http.ResponseWriter, err error) {
 
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-
-	s.log.Warn("gateway error",
-		zap.Int("status", code),
-		zap.Error(err),
-	)
+	s.log.Warn("gateway error", zap.Int("status", code), zap.Error(err))
 }
 
-// Addr returns the address the server is configured to listen on.
-func (s *Server) Addr() string {
-	return s.httpServer.Addr
-}
-
-// FormatUptime is a helper kept for future metrics middleware.
 func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%s", d.Round(time.Second))
 }
