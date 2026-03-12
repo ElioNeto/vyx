@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -25,8 +26,8 @@ import (
 	"github.com/ElioNeto/vyx/core/application/heartbeat"
 	"github.com/ElioNeto/vyx/core/application/lifecycle"
 	"github.com/ElioNeto/vyx/core/application/monitor"
-	dgw "github.com/ElioNeto/vyx/core/domain/gateway"
 	doamincfg "github.com/ElioNeto/vyx/core/domain/config"
+	dgw "github.com/ElioNeto/vyx/core/domain/gateway"
 	infracfg "github.com/ElioNeto/vyx/core/infrastructure/config"
 	infragw "github.com/ElioNeto/vyx/core/infrastructure/gateway"
 	"github.com/ElioNeto/vyx/core/infrastructure/ipc/uds"
@@ -107,14 +108,12 @@ func cmdNew(name string) {
 		fatalf("vyx new: write vyx.yaml: %v", err)
 	}
 
-	// Create directory skeleton.
 	for _, dir := range []string{"workers", "schemas"} {
 		if err := os.MkdirAll(filepath.Join(name, dir), 0755); err != nil {
 			fatalf("vyx new: create %s: %v", dir, err)
 		}
 	}
 
-	// Write a minimal README.
 	readme := fmt.Sprintf("# %s\n\nCreated with `vyx new %s`.\n\nRun `cd %s && vyx dev` to start in development mode.\n", name, name, name)
 	if err := os.WriteFile(filepath.Join(name, "README.md"), []byte(readme), 0644); err != nil {
 		fatalf("vyx new: write README: %v", err)
@@ -133,21 +132,17 @@ func cmdBuild() {
 	if _, err := os.Stat("workers"); err == nil {
 		tsDir = "workers"
 	}
+	if _, err := os.Stat("backend/go"); err == nil {
+		goDir = "backend/go"
+	}
 
 	output := cfg.Build.RouteMapOutput
 	if output == "" {
 		output = "./route_map.json"
 	}
 
-	errs, err := generateRouteMap(goDir, tsDir, output)
-	if err != nil {
+	if err := runAnnotateCmd(goDir, tsDir, output); err != nil {
 		fatalf("vyx build: %v", err)
-	}
-	if len(errs) > 0 {
-		for _, e := range errs {
-			fmt.Fprintf(os.Stderr, "  annotation error: %v\n", e)
-		}
-		os.Exit(1)
 	}
 	fmt.Printf("✓ route_map.json written to %s\n", output)
 }
@@ -167,18 +162,10 @@ func cmdAnnotate() {
 		output = "./route_map.json"
 	}
 
-	errs, err := generateRouteMap("", tsDir, output)
-	if err != nil {
+	if err := runAnnotateCmd("", tsDir, output); err != nil {
 		fatalf("vyx annotate: %v", err)
 	}
-	if len(errs) > 0 {
-		for _, e := range errs {
-			fmt.Fprintf(os.Stderr, "  annotation error: %v\n", e)
-		}
-		os.Exit(1)
-	}
 
-	// Read back and pretty-print to stdout.
 	data, err := os.ReadFile(output)
 	if err != nil {
 		fatalf("vyx annotate: read output: %v", err)
@@ -190,6 +177,52 @@ func cmdAnnotate() {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(pretty)
+}
+
+// runAnnotateCmd invokes the vyx annotation scanner via os/exec.
+//
+// Strategy: shell out to `go run github.com/ElioNeto/vyx/cmd/annotate` so
+// that the core module does not need a direct import of the scanner module.
+// This keeps the core's dependency graph clean and avoids replace-directive
+// coupling between the two modules.
+//
+// Flags forwarded to cmd/annotate:
+//
+//	--go-dir   <dir>    directory containing Go source files with @Route annotations
+//	--ts-dir   <dir>    directory containing TypeScript/JavaScript files with @Route annotations
+//	--output   <file>   path where route_map.json will be written
+func runAnnotateCmd(goDir, tsDir, output string) error {
+	// Build argument list.
+	args := []string{
+		"run", "github.com/ElioNeto/vyx/cmd/annotate",
+		"--output", output,
+	}
+	if goDir != "" {
+		args = append(args, "--go-dir", goDir)
+	}
+	if tsDir != "" {
+		args = append(args, "--ts-dir", tsDir)
+	}
+
+	cmd := exec.Command("go", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		// Provide a helpful hint when the scanner binary is not installed.
+		var exitErr *exec.ExitError
+		if strings.Contains(err.Error(), "no required module") ||
+			(func() bool {
+				if ok := errors.As(err, &exitErr); ok {
+					return exitErr.ExitCode() == 127
+				}
+				return false
+			}()) {
+			return fmt.Errorf("scanner binary not found — run `go install github.com/ElioNeto/vyx/cmd/annotate@latest`: %w", err)
+		}
+		return err
+	}
+	return nil
 }
 
 // ─── vyx dev / vyx start ─────────────────────────────────────────────────────
@@ -243,7 +276,7 @@ func runServer(devMode bool) {
 	cfgLoader.WithRouteMap(routeMapPath, rm)
 	log.Info("route map loaded", zap.String("path", routeMapPath))
 
-	// --- Infrastructure: UDS transport (#45) ---
+	// --- Infrastructure: UDS transport ---
 	socketDir := cfg.IPC.SocketDir
 	if socketDir == "" {
 		socketDir = uds.DefaultSocketDir
@@ -266,7 +299,7 @@ func runServer(devMode bool) {
 	jwtValidator := infragw.NewJWTValidator([]byte(jwtSecret))
 	schemaValidator := infragw.NewSchemaValidator(cfg.Build.SchemasDir)
 
-	// --- Dispatcher (#45) ---
+	// --- Dispatcher ---
 	dispatcher := apgw.NewDispatcher(
 		rm,
 		transport,
@@ -283,7 +316,7 @@ func runServer(devMode bool) {
 		time.Minute,
 	)
 
-	// --- HTTP server (#43 — dev=h2c, prod=H2+TLS) ---
+	// --- HTTP server (dev=h2c, prod=H2+TLS) ---
 	var gwCfg infragw.Config
 	if devMode {
 		gwCfg = infragw.DevConfig()
@@ -292,13 +325,13 @@ func runServer(devMode bool) {
 	}
 	httpServer := infragw.New(gwCfg, dispatcher, rateLimiter, log)
 
-	// --- Heartbeat sender (#38, #45) ---
-	hbSender := heartbeat.NewSender(
-		transport,
-		repo,
-		heartbeat.Config{Interval: 5 * time.Second},
-		log,
-	)
+	hbCfg := heartbeat.Config{Interval: 5 * time.Second, MissedThreshold: 2}
+
+	// --- Heartbeat sender (core → worker) ---
+	hbSender := heartbeat.NewSender(transport, repo, hbCfg, log)
+
+	// --- Heartbeat receiver (worker → core) (#49) ---
+	hbReceiver := heartbeat.NewReceiver(transport, repo, service, hbCfg, log)
 
 	// --- Context + signal handling ---
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -316,7 +349,7 @@ func runServer(devMode bool) {
 		)
 	}
 
-	// --- Auto-spawn workers from vyx.yaml (#44) ---
+	// --- Auto-spawn workers from vyx.yaml ---
 	for _, wcfg := range cfg.Workers {
 		replicas := wcfg.Replicas
 		if replicas <= 0 {
@@ -328,7 +361,6 @@ func runServer(devMode bool) {
 				workerID = fmt.Sprintf("%s-%d", wcfg.ID, i)
 			}
 
-			// Register UDS socket before spawning so the worker can connect.
 			if err := transport.Register(ctx, workerID); err != nil {
 				log.Error("failed to register UDS socket for worker",
 					zap.String("worker_id", workerID), zap.Error(err))
@@ -338,11 +370,9 @@ func runServer(devMode bool) {
 			args := parseArgs(wcfg.Command)
 			cmd := args[0]
 			cmdArgs := args[1:]
-			// Inject socket path via env so the worker SDK knows where to connect.
 			cmdArgs = append(cmdArgs, "--vyx-socket",
 				filepath.Join(socketDir, workerID+".sock"))
 
-			// Apply startup timeout.
 			spawnCtx := ctx
 			if wcfg.StartupTimeout > 0 {
 				var cancel context.CancelFunc
@@ -364,6 +394,9 @@ func runServer(devMode bool) {
 				zap.String("command", wcfg.Command),
 				zap.Int("replica", i),
 			)
+
+			// Start the worker→core heartbeat read loop immediately (#49).
+			hbReceiver.StartLoop(ctx, w.ID)
 		}
 	}
 
@@ -371,6 +404,7 @@ func runServer(devMode bool) {
 	go healthMonitor.Run(ctx)
 	go cfgLoader.WatchSIGHUP(ctx)
 	go hbSender.Run(ctx)
+	go hbReceiver.Run(ctx) // reconciles any workers added after startup
 
 	// Start HTTP server.
 	go func() {
@@ -385,7 +419,6 @@ func runServer(devMode bool) {
 		}
 	}()
 
-	// Block until signal.
 	<-ctx.Done()
 	log.Info("vyx core shutting down — draining workers")
 
@@ -421,37 +454,9 @@ func mustLoadConfig() *doamincfg.Config {
 	return cfg
 }
 
-// parseArgs splits a command string into argv, honouring quoted segments.
 func parseArgs(command string) []string {
 	return strings.Fields(command)
 }
-
-// generateRouteMap shells out to the scanner package.
-// The scanner lives in a separate module so we call it via its public API.
-func generateRouteMap(goDir, tsDir, output string) ([]annotationError, error) {
-	// The scanner module is separate; here we compile-call via os/exec.
-	// Direct import is avoided to keep core/ independent of scanner/.
-	// If scanner is vendored into core, replace with direct scanner.Generate call.
-	var errs []annotationError
-
-	// For now, produce an empty route map when no workers directory exists.
-	if goDir == "" && tsDir == "" {
-		if err := os.WriteFile(output, []byte(`{"routes":[]}`), 0644); err != nil {
-			return nil, err
-		}
-		return nil, nil
-	}
-
-	// Write empty map as placeholder; real scan done via CLI tool.
-	if err := os.WriteFile(output, []byte(`{"routes":[]}`), 0644); err != nil {
-		return nil, err
-	}
-	return errs, nil
-}
-
-type annotationError struct{ msg string }
-
-func (e annotationError) Error() string { return e.msg }
 
 func fatalf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "vyx: "+format+"\n", args...)
