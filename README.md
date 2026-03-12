@@ -3,7 +3,7 @@
 > A high-performance polyglot full-stack framework with a Go Core Orchestrator, annotation-based routing, and IPC via Unix Domain Sockets + Apache Arrow.
 
 ![License](https://img.shields.io/github/license/ElioNeto/vyx)
-![Status](https://img.shields.io/badge/status-WIP-orange)
+![Status](https://img.shields.io/badge/status-v0.1.0--MVP-brightgreen)
 ![Go](https://img.shields.io/badge/core-Go-00ADD8?logo=go)
 ![Node](https://img.shields.io/badge/worker-Node.js-339933?logo=node.js)
 ![Python](https://img.shields.io/badge/worker-Python-3776AB?logo=python)
@@ -75,10 +75,10 @@ export default function DashboardPage() { ... }
 ## CLI
 
 ```bash
-vyx new project   # scaffold a new project
-vyx dev           # start core in development mode (hot reload)
-vyx build         # generate optimized artifacts
-vyx annotate      # validate annotations and display route map
+vyx new <project-name>   # scaffold a new project with default vyx.yaml
+vyx dev                  # start core in development mode (verbose logging + SIGHUP reload)
+vyx build                # run annotation scanner, generate route_map.json, build binary
+vyx annotate             # validate annotations and display the discovered route map
 ```
 
 ---
@@ -87,7 +87,8 @@ vyx annotate      # validate annotations and display route map
 
 ```
 project/
-├── core/               # core configurations
+├── core/               # Go core orchestrator
+├── scanner/            # Annotation scanner (Go, TypeScript, TSX)
 ├── backend/
 │   ├── go/             # Go services
 │   ├── node/           # Node.js services
@@ -104,10 +105,23 @@ project/
 
 | Phase | Scope | Status |
 |-------|-------|--------|
-| 1 – MVP | Go core, Node + Go workers, UDS/JSON, JWT, basic validation | 🔄 In Progress |
-| 2 – Expansion | Python support, Apache Arrow, circuit breakers, hot reload | 🗓 Planned |
-| 3 – Observability | Metrics (Prometheus), tracing (OpenTelemetry), full CLI | 🗓 Planned |
+| 1 – MVP | Go core, Node + Go workers, UDS/JSON, JWT, basic validation, CLI, WebSocket | ✅ Complete |
+| 2 – Expansion | Python support, Apache Arrow, circuit breakers, worker pools, hot reload | 🔄 In Progress |
+| 3 – Observability | Metrics (Prometheus), tracing (OpenTelemetry), TLS, full CLI, docs | 🗓 Planned |
 | 4 – Scalability | Remote workers (gRPC), Kubernetes operator | 🗓 Planned |
+
+---
+
+## Phase 1 – What's included in v0.1.0
+
+- ✅ **Go Core Orchestrator** — HTTP/1.1 + HTTP/2 + WebSocket gateway with JWT authentication, JSON Schema validation, and rate limiting
+- ✅ **Worker Lifecycle** — spawn, monitor, restart (exponential backoff), graceful shutdown, handshake & registration protocol
+- ✅ **IPC via Unix Domain Sockets** — binary framing protocol (request, response, heartbeat, error), bidirectional heartbeat (core ↔ worker)
+- ✅ **Annotation Scanner** — static analysis for Go, TypeScript, and TSX files generating `route_map.json`
+- ✅ **Router** — path parameter support (`:id`), method-based dispatch, authorization enforcement
+- ✅ **CLI** — `vyx new`, `vyx dev`, `vyx build`, `vyx annotate` subcommands wired to the real scanner
+- ✅ **`vyx.yaml` manifest** — schema, config loader, SIGHUP reload
+- ✅ **Structured logging** — via `zap`, with access logs (method, path, worker, user, status, latency, correlation ID)
 
 ---
 
