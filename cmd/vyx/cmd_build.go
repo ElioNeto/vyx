@@ -4,8 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-
-	"github.com/ElioNeto/vyx/scanner"
 )
 
 func runBuild(args []string) {
@@ -16,29 +14,20 @@ func runBuild(args []string) {
 	output := fs.String("output", "route_map.json", "Output path for the generated route map")
 	_ = fs.Parse(args)
 
-	fmt.Println("🔍 vyx build: scanning annotations...")
+	fmt.Println("\U0001f50d vyx build: scanning annotations...")
 
-	errs, err := scanner.Generate(*goDir, *tsDir, *frontendDir, *output)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+	if err := runBuildAnnotate(*goDir, *tsDir, *frontendDir, *output); err != nil {
+		fmt.Fprintf(os.Stderr, "error: annotation scan failed: %v\n", err)
 		os.Exit(1)
 	}
 
-	if len(errs) > 0 {
-		fmt.Fprintln(os.Stderr, "annotation errors:")
-		for _, e := range errs {
-			fmt.Fprintf(os.Stderr, "  ❌ %s\n", e.Error())
-		}
-		os.Exit(1)
-	}
-
-	fmt.Printf("✅ route_map.json written to %s\n", *output)
-	fmt.Println("🔧 Building core binary...")
+	fmt.Printf("\u2705 route_map.json written to %s\n", *output)
+	fmt.Println("\U0001f527 Building core binary...")
 
 	if err := runCommand("go", "build", "-o", ".vyx/core", "./core/cmd/vyx"); err != nil {
 		fmt.Fprintf(os.Stderr, "error: go build failed: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Println("✅ Build complete.")
+	fmt.Println("\u2705 Build complete.")
 }
