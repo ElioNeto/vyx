@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	dgw "github.com/ElioNeto/vyx/core/domain/gateway"
@@ -55,16 +56,48 @@ func NewDispatcher(
 
 // Dispatch runs the full pipeline: JWT → route → auth → schema → UDS → response.
 func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dgw.GatewayResponse, error) {
-	// 1. Route lookup.
-	route, ok := d.routes.Lookup(req.Method, req.Path)
+	start := time.Now()
+
+	// Propagate or generate a correlation ID (#40).
+	correlationID := req.Headers["X-Request-Id"]
+	if correlationID == "" {
+		correlationID = uuid.NewString()
+	}
+
+	userID := "-"
+	statusCode := 0
+
+	// Deferred access log emitted on every exit path (#40).
+	defer func() {
+		latency := time.Since(start)
+		level := d.log.Info
+		if statusCode >= 400 {
+			level = d.log.Warn
+		}
+		level("access",
+			zap.String("method", req.Method),
+			zap.String("path", req.Path),
+			zap.String("user_id", userID),
+			zap.Int("status", statusCode),
+			zap.Duration("latency", latency),
+			zap.String("correlation_id", correlationID),
+		)
+	}()
+
+	// 1. Route lookup (supports path params via trie, #36).
+	result, ok := d.routes.Lookup(req.Method, req.Path)
 	if !ok {
+		statusCode = 404
 		return nil, dgw.ErrRouteNotFound
 	}
+	route := result.Entry
+	req.Params = result.Params
 
 	// 2. JWT validation (skip if no auth roles defined).
 	if len(route.AuthRoles) > 0 {
 		token := req.Headers["Authorization"]
 		if token == "" {
+			statusCode = 401
 			return nil, dgw.ErrUnauthorized
 		}
 		// Strip "Bearer " prefix if present.
@@ -73,12 +106,15 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 		}
 		claims, err := d.jwt.Validate(token)
 		if err != nil {
+			statusCode = 401
 			return nil, dgw.ErrUnauthorized
 		}
 		req.Claims = claims
+		userID = claims.UserID
 
 		// 3. Role-based authorisation.
 		if !hasRequiredRole(claims.Roles, route.AuthRoles) {
+			statusCode = 403
 			return nil, dgw.ErrForbidden
 		}
 	}
@@ -86,19 +122,25 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 	// 4. JSON Schema validation.
 	if route.Validate != "" && len(req.Body) > 0 {
 		if err := d.schema.Validate(route.Validate, req.Body); err != nil {
+			statusCode = 400
 			return nil, fmt.Errorf("%w: %v", dgw.ErrSchemaValidation, err)
 		}
 	}
 
 	// 5. Build IPC request payload and forward to worker.
+	// Includes query params (#37), path params (#36), and correlation ID (#40).
 	payload, err := json.Marshal(map[string]any{
-		"method":  req.Method,
-		"path":    req.Path,
-		"headers": req.Headers,
-		"body":    req.Body,
-		"claims":  req.Claims,
+		"method":         req.Method,
+		"path":           req.Path,
+		"headers":        req.Headers,
+		"query":          req.Query,
+		"params":         req.Params,
+		"body":           req.Body,
+		"claims":         req.Claims,
+		"correlation_id": correlationID,
 	})
 	if err != nil {
+		statusCode = 500
 		return nil, fmt.Errorf("gateway: marshal ipc payload: %w", err)
 	}
 
@@ -109,6 +151,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 		Type:    ipc.TypeRequest,
 		Payload: payload,
 	}); err != nil {
+		statusCode = 502
 		return nil, fmt.Errorf("gateway: send to worker %s: %w", route.WorkerID, err)
 	}
 
@@ -116,22 +159,36 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 	respMsg, err := d.transport.Receive(dispatchCtx, route.WorkerID)
 	if err != nil {
 		if dispatchCtx.Err() != nil {
+			statusCode = 504
 			return nil, dgw.ErrUpstreamTimeout
 		}
+		statusCode = 502
 		return nil, fmt.Errorf("gateway: receive from worker %s: %w", route.WorkerID, err)
 	}
 
 	if respMsg.Type == ipc.TypeError {
+		statusCode = 502
 		return &dgw.GatewayResponse{StatusCode: 502, Body: respMsg.Payload}, nil
 	}
 
-	d.log.Debug("request dispatched",
-		zap.String("method", req.Method),
-		zap.String("path", req.Path),
-		zap.String("worker", route.WorkerID),
-	)
+	// 7. Decode the structured worker response envelope (#39).
+	var workerResp dgw.WorkerResponse
+	if err := json.Unmarshal(respMsg.Payload, &workerResp); err != nil {
+		// Fallback: treat raw payload as 200 body for backwards compatibility.
+		statusCode = 200
+		return &dgw.GatewayResponse{StatusCode: 200, Body: respMsg.Payload}, nil
+	}
 
-	return &dgw.GatewayResponse{StatusCode: 200, Body: respMsg.Payload}, nil
+	if workerResp.StatusCode == 0 {
+		workerResp.StatusCode = 200
+	}
+	statusCode = workerResp.StatusCode
+
+	return &dgw.GatewayResponse{
+		StatusCode: workerResp.StatusCode,
+		Headers:    workerResp.Headers,
+		Body:       workerResp.Body,
+	}, nil
 }
 
 // hasRequiredRole returns true if the caller holds at least one required role.

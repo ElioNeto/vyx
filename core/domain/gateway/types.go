@@ -12,6 +12,8 @@ type GatewayRequest struct {
 	Method  string
 	Path    string
 	Headers map[string]string
+	Query   map[string]string // populated from URL query string (#37)
+	Params  map[string]string // populated from path parameters (#36)
 	Body    []byte
 	Claims  *Claims // nil when the route requires no auth
 }
@@ -21,4 +23,12 @@ type GatewayResponse struct {
 	StatusCode int
 	Headers    map[string]string
 	Body       []byte
+}
+
+// WorkerResponse is the structured envelope that workers must return.
+// The Dispatcher deserialises the IPC payload into this struct (#39).
+type WorkerResponse struct {
+	StatusCode int               `json:"status_code"`
+	Headers    map[string]string `json:"headers,omitempty"`
+	Body       []byte            `json:"body,omitempty"`
 }
