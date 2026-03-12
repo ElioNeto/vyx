@@ -1,3 +1,5 @@
+//go:build !windows
+
 package uds_test
 
 import (
@@ -21,32 +23,24 @@ func TestTransport_SendReceive(t *testing.T) {
 
 	const workerID = "test-worker"
 
-	// Server: register socket and start listening.
 	if err := transport.Register(ctx, workerID); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
-
-	// Give the goroutine a moment to start Accept().
 	time.Sleep(10 * time.Millisecond)
 
-	// Client: dial the socket (simulates a worker connecting).
 	sockPath := filepath.Join(dir, workerID+".sock")
 	client, err := uds.Dial(ctx, sockPath)
 	if err != nil {
 		t.Fatalf("Dial() error = %v", err)
 	}
 	defer client.Close()
-
-	// Give accept goroutine time to register the connection.
 	time.Sleep(20 * time.Millisecond)
 
-	// Core sends a request to the worker.
 	want := ipc.Message{Type: ipc.TypeRequest, Payload: []byte(`{"route":"/api/users"}`)}
 	if err := transport.Send(ctx, workerID, want); err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
 
-	// Worker receives the request.
 	got, err := client.Receive()
 	if err != nil {
 		t.Fatalf("client.Receive() error = %v", err)
@@ -82,13 +76,11 @@ func TestTransport_WorkerSendsHeartbeat(t *testing.T) {
 	defer client.Close()
 	time.Sleep(20 * time.Millisecond)
 
-	// Worker sends heartbeat to the core.
 	hb := ipc.Message{Type: ipc.TypeHeartbeat, Payload: []byte{}}
 	if err := client.Send(hb); err != nil {
 		t.Fatalf("client.Send() heartbeat error = %v", err)
 	}
 
-	// Core reads the heartbeat.
 	got, err := transport.Receive(ctx, workerID)
 	if err != nil {
 		t.Fatalf("Receive() error = %v", err)
