@@ -108,7 +108,9 @@ func (m *Manager) StopAll(ctx context.Context) error {
 	return lastErr
 }
 
-// SendHeartbeat is a no-op at the OS process level; heartbeats are handled via UDS.
+// SendHeartbeat is not implemented at the OS process layer.
+// Core→worker heartbeat frames are sent by application/heartbeat.Sender
+// over the IPC transport — keeping this manager focused on spawn/stop only.
 func (m *Manager) SendHeartbeat(_ context.Context, _ string) error {
 	return nil
 }
