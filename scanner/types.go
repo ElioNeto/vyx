@@ -8,6 +8,10 @@ type Route struct {
 	AuthRoles []string `json:"auth_roles"`
 	Validate  string   `json:"validate"`
 	Type      string   `json:"type"` // "api" or "page"
+
+	// Source location — populated by parsers, excluded from route_map.json.
+	File string `json:"-"`
+	Line int    `json:"-"`
 }
 
 // AnnotationError holds information about a malformed annotation.

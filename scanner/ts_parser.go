@@ -149,5 +149,7 @@ func buildTSRoute(file string, line int, routeAnnot, pageAnnot, validateAnnot, a
 		AuthRoles: roles,
 		Validate:  validate,
 		Type:      routeType,
+		File:      file,
+		Line:      line,
 	}, nil
 }

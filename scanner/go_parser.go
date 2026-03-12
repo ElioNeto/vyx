@@ -131,5 +131,7 @@ func buildRoute(file string, line int, routeAnnot, validateAnnot, authAnnot, wor
 		AuthRoles: roles,
 		Validate:  validate,
 		Type:      "api",
+		File:      file,
+		Line:      line,
 	}, nil
 }
