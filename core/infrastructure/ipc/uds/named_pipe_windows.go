@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/ElioNeto/vyx/core/domain/ipc"
@@ -19,11 +20,8 @@ import (
 )
 
 const (
-	// namedPipePrefix is the Windows Named Pipe namespace.
-	namedPipePrefix = `\\.\pipe\vyx-`
-
-	// pipeBufferSize is the in/out buffer size for the named pipe.
-	pipeBufferSize = 65536
+	namedPipePrefix  = `\\.\pipe\vyx-`
+	pipeBufferSize   = 65536
 )
 
 // windowsConn wraps a net.Conn with a per-connection write mutex.
@@ -33,27 +31,15 @@ type windowsConn struct {
 }
 
 // NamedPipeTransport implements domain/ipc.Transport using Windows Named Pipes.
-// Security: each pipe is created with a DACL that allows access only to the
-// current user's SID — equivalent to UDS permission 0600 on Unix.
-//
-// Named Pipe path format: \\.\pipe\vyx-<workerID>
 type NamedPipeTransport struct {
 	mu          sync.RWMutex
 	listeners   map[string]*namedPipeListener
 	connections map[string]*windowsConn
 }
 
-// namedPipeListener holds the server-side handle and wraps it as a net.Listener.
 type namedPipeListener struct {
 	path   string
 	handle windows.Handle
-	accept chan acceptResult
-	done   chan struct{}
-}
-
-type acceptResult struct {
-	conn net.Conn
-	err  error
 }
 
 // NewNamedPipeTransport creates an empty NamedPipeTransport.
@@ -64,15 +50,13 @@ func NewNamedPipeTransport() *NamedPipeTransport {
 	}
 }
 
-// pipePath returns the Named Pipe path for the given worker.
 func pipePath(workerID string) string {
 	return namedPipePrefix + workerID
 }
 
-// createSecureNamedPipe creates a Named Pipe handle with a DACL that restricts
-// access to the current user's SID only (equivalent to Unix mode 0600).
+// createSecureNamedPipe creates a Named Pipe with a DACL restricted to the
+// current user's SID only (equivalent to Unix mode 0600).
 func createSecureNamedPipe(path string) (windows.Handle, error) {
-	// Obtain the current user's SID.
 	token, err := windows.OpenCurrentProcessToken()
 	if err != nil {
 		return windows.InvalidHandle, fmt.Errorf("named pipe: OpenCurrentProcessToken: %w", err)
@@ -84,14 +68,10 @@ func createSecureNamedPipe(path string) (windows.Handle, error) {
 		return windows.InvalidHandle, fmt.Errorf("named pipe: GetTokenUser: %w", err)
 	}
 
-	// Build an Explicit Access entry: GENERIC_READ | GENERIC_WRITE for the user SID.
-	userSIDStr, err := user.User.Sid.String()
-	if err != nil {
-		return windows.InvalidHandle, fmt.Errorf("named pipe: SID.String: %w", err)
-	}
+	// Sid.String() returns only the string value (no error).
+	userSIDStr := user.User.Sid.String()
 
-	// Build SDDL descriptor: owner is the user, DACL allows only the user full access.
-	// D:(A;;GA;;;<SID>) — Allow (A) GENERIC_ALL (GA) to the user SID.
+	// SDDL: owner = user, DACL allows only the user GENERIC_ALL access.
 	sddl := fmt.Sprintf("O:%sD:(A;;GA;;;%s)", userSIDStr, userSIDStr)
 	sd, err := windows.SecurityDescriptorFromString(sddl)
 	if err != nil {
@@ -109,13 +89,12 @@ func createSecureNamedPipe(path string) (windows.Handle, error) {
 		return windows.InvalidHandle, fmt.Errorf("named pipe: UTF16PtrFromString: %w", err)
 	}
 
-	// FILE_FLAG_OVERLAPPED is needed for async I/O; we use blocking mode here.
 	const (
-		pipeAccessDuplex     = 0x00000003
-		pipeTypeByte         = 0x00000000
-		pipeReadModeByte     = 0x00000000
-		pipeWait             = 0x00000000
-		pipeUnlimitedInstances = 255
+		pipeAccessDuplex       = 0x00000003
+		pipeTypeByte           = 0x00000000
+		pipeReadModeByte       = 0x00000000
+		pipeWait               = 0x00000000
+		pipeUnlimitedInstances = uint32(255)
 	)
 
 	handle, err := windows.CreateNamedPipe(
@@ -125,7 +104,7 @@ func createSecureNamedPipe(path string) (windows.Handle, error) {
 		pipeUnlimitedInstances,
 		pipeBufferSize,
 		pipeBufferSize,
-		0, // default timeout
+		0,
 		sa,
 	)
 	if err != nil {
@@ -134,8 +113,8 @@ func createSecureNamedPipe(path string) (windows.Handle, error) {
 	return handle, nil
 }
 
-// Register creates a Named Pipe for workerID with a user-restricted DACL
-// and spawns a goroutine to accept exactly one connection.
+// Register creates a Named Pipe for workerID and spawns a goroutine to accept
+// exactly one connection.
 func (t *NamedPipeTransport) Register(ctx context.Context, workerID string) error {
 	path := pipePath(workerID)
 
@@ -144,12 +123,7 @@ func (t *NamedPipeTransport) Register(ctx context.Context, workerID string) erro
 		return err
 	}
 
-	l := &namedPipeListener{
-		path:   path,
-		handle: handle,
-		accept: make(chan acceptResult, 1),
-		done:   make(chan struct{}),
-	}
+	l := &namedPipeListener{path: path, handle: handle}
 
 	t.mu.Lock()
 	t.listeners[workerID] = l
@@ -159,44 +133,33 @@ func (t *NamedPipeTransport) Register(ctx context.Context, workerID string) erro
 	return nil
 }
 
-// acceptPipe calls ConnectNamedPipe (blocking) and wraps the handle as net.Conn.
 func (t *NamedPipeTransport) acceptPipe(ctx context.Context, workerID string, l *namedPipeListener) {
-	type result struct {
-		err error
-	}
-	ch := make(chan result, 1)
-
+	ch := make(chan error, 1)
 	go func() {
-		// ConnectNamedPipe blocks until a client connects.
 		err := windows.ConnectNamedPipe(l.handle, nil)
-		// ERROR_PIPE_CONNECTED means a client connected before we called
-		// ConnectNamedPipe — treat as success.
 		if err == windows.ERROR_PIPE_CONNECTED {
 			err = nil
 		}
-		ch <- result{err}
+		ch <- err
 	}()
 
 	select {
 	case <-ctx.Done():
-		// Cancel the blocking ConnectNamedPipe by closing the handle.
 		windows.CloseHandle(l.handle)
 		return
-	case r := <-ch:
-		if r.err != nil {
+	case err := <-ch:
+		if err != nil {
 			return
 		}
 	}
 
-	// Wrap the raw handle as a net.Conn using a pipe-backed ReadWriteCloser.
 	c := newHandleConn(l.handle, l.path)
-
 	t.mu.Lock()
 	t.connections[workerID] = &windowsConn{Conn: c}
 	t.mu.Unlock()
 }
 
-// handleConn wraps a windows.Handle as a net.Conn (minimal implementation).
+// handleConn wraps a windows.Handle as a net.Conn.
 type handleConn struct {
 	handle windows.Handle
 	path   string
@@ -209,8 +172,7 @@ func newHandleConn(h windows.Handle, path string) *handleConn {
 
 func (c *handleConn) Read(b []byte) (int, error) {
 	var n uint32
-	err := windows.ReadFile(c.handle, b, &n, nil)
-	if err != nil {
+	if err := windows.ReadFile(c.handle, b, &n, nil); err != nil {
 		return 0, err
 	}
 	if n == 0 {
@@ -221,8 +183,7 @@ func (c *handleConn) Read(b []byte) (int, error) {
 
 func (c *handleConn) Write(b []byte) (int, error) {
 	var n uint32
-	err := windows.WriteFile(c.handle, b, &n, nil)
-	if err != nil {
+	if err := windows.WriteFile(c.handle, b, &n, nil); err != nil {
 		return 0, err
 	}
 	return int(n), nil
@@ -231,7 +192,8 @@ func (c *handleConn) Write(b []byte) (int, error) {
 func (c *handleConn) Close() error {
 	var closeErr error
 	c.once.Do(func() {
-		windows.DisconnectNamedPipe(c.handle)
+		// Flush remaining data before closing.
+		_ = windows.FlushFileBuffers(c.handle)
 		closeErr = windows.CloseHandle(c.handle)
 	})
 	return closeErr
@@ -240,9 +202,11 @@ func (c *handleConn) Close() error {
 func (c *handleConn) LocalAddr() net.Addr  { return pipeAddr(c.path) }
 func (c *handleConn) RemoteAddr() net.Addr { return pipeAddr(c.path) }
 
-func (c *handleConn) SetDeadline(t interface{ isTime() }) error      { return nil }
-func (c *handleConn) SetReadDeadline(t interface{ isTime() }) error  { return nil }
-func (c *handleConn) SetWriteDeadline(t interface{ isTime() }) error { return nil }
+// SetDeadline, SetReadDeadline, SetWriteDeadline satisfy net.Conn.
+// Named Pipes use blocking I/O; deadlines are not supported at this layer.
+func (c *handleConn) SetDeadline(_ time.Time) error      { return nil }
+func (c *handleConn) SetReadDeadline(_ time.Time) error  { return nil }
+func (c *handleConn) SetWriteDeadline(_ time.Time) error { return nil }
 
 // pipeAddr implements net.Addr for Named Pipe connections.
 type pipeAddr string
@@ -280,7 +244,7 @@ func (t *NamedPipeTransport) Deregister(_ context.Context, workerID string) erro
 		delete(t.connections, workerID)
 	}
 	if l, ok := t.listeners[workerID]; ok {
-		windows.CloseHandle(l.handle)
+		_ = windows.CloseHandle(l.handle)
 		delete(t.listeners, workerID)
 	}
 	return nil
@@ -296,7 +260,7 @@ func (t *NamedPipeTransport) Close() error {
 		delete(t.connections, id)
 	}
 	for id, l := range t.listeners {
-		windows.CloseHandle(l.handle)
+		_ = windows.CloseHandle(l.handle)
 		delete(t.listeners, id)
 	}
 	return nil
@@ -313,7 +277,6 @@ func (t *NamedPipeTransport) getConn(workerID string) (*windowsConn, error) {
 }
 
 // DialNamedPipe connects to the Named Pipe for the given workerID.
-// Used by workers and integration tests on Windows.
 func DialNamedPipe(ctx context.Context, workerID string) (*Client, error) {
 	path := pipePath(workerID)
 	pathPtr, err := windows.UTF16PtrFromString(path)
@@ -324,8 +287,8 @@ func DialNamedPipe(ctx context.Context, workerID string) (*Client, error) {
 	handle, err := windows.CreateFile(
 		pathPtr,
 		windows.GENERIC_READ|windows.GENERIC_WRITE,
-		0,   // no sharing
-		nil, // default security
+		0,
+		nil,
 		windows.OPEN_EXISTING,
 		0,
 		0,
@@ -337,11 +300,10 @@ func DialNamedPipe(ctx context.Context, workerID string) (*Client, error) {
 	return &Client{conn: newHandleConn(handle, path)}, nil
 }
 
-// PlatformTransport returns the correct Transport for the current OS.
-// On Windows: NamedPipeTransport. On Unix: UDS Transport.
+// PlatformTransport returns the Named Pipe transport for Windows.
 func PlatformTransport() ipc.Transport {
 	return NewNamedPipeTransport()
 }
 
-// Ensure NamedPipeTransport satisfies the domain interface at compile time.
+// Compile-time interface check.
 var _ ipc.Transport = (*NamedPipeTransport)(nil)
