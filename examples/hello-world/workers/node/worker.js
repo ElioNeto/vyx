@@ -4,6 +4,9 @@
  * Connects to the vyx core via Unix Domain Socket (UDS) on Unix/macOS
  * or via Named Pipe on Windows, performs the handshake, and handles requests.
  *
+ * Wire protocol (matches core/infrastructure/ipc/framing/framing.go):
+ *   [Length: 4 bytes LE][Type: 1 byte][Payload: N bytes]
+ *
  * Annotated routes (parsed at build time by `vyx build`):
  *
  * @Route(GET /api/products)
@@ -26,19 +29,28 @@ const TYPE_HANDSHAKE = 0x10;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+/**
+ * Write a framed message.
+ * Frame layout: [Length 4B LE][Type 1B][Payload NB]
+ * Must match binary.LittleEndian used in framing.go.
+ */
 function writeFrame(socket, msgType, payload) {
   const payloadBuf = payload ? Buffer.from(JSON.stringify(payload)) : Buffer.alloc(0);
   const header = Buffer.alloc(5);
-  header.writeUInt32BE(payloadBuf.length, 0);
+  header.writeUInt32LE(payloadBuf.length, 0); // little-endian — matches framing.go
   header.writeUInt8(msgType, 4);
   socket.write(Buffer.concat([header, payloadBuf]));
 }
 
+/**
+ * Parse as many complete frames as possible from buffer.
+ * Length field is 4 bytes LE (matches binary.LittleEndian in framing.go).
+ */
 function parseFrames(buffer) {
   const frames = [];
   let offset = 0;
   while (offset + 5 <= buffer.length) {
-    const length = buffer.readUInt32BE(offset);
+    const length = buffer.readUInt32LE(offset); // little-endian — matches framing.go
     const msgType = buffer.readUInt8(offset + 4);
     if (offset + 5 + length > buffer.length) break;
     const payload = buffer.slice(offset + 5, offset + 5 + length);
@@ -109,7 +121,7 @@ for (let i = 0; i < args.length - 1; i++) {
 
 console.log(`[node:api] connecting to ${socketPath}`);
 
-// net.createConnection accepts a Named Pipe path on Windows transparently.
+// net.createConnection supports Named Pipe paths on Windows natively.
 const socket = net.createConnection(socketPath, () => {
   console.log('[node:api] connected to core');
 
@@ -146,6 +158,10 @@ socket.on('data', (data) => {
         writeFrame(socket, TYPE_RESPONSE, resp);
         break;
       }
+
+      default:
+        // Unknown type — ignore silently (forward compat)
+        break;
     }
   }
 });
