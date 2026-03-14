@@ -4,6 +4,12 @@ Thank you for your interest in contributing to **vyx**! This document explains h
 
 ---
 
+## Roadmap
+
+Before picking an issue, check the **[ROADMAP.md](./ROADMAP.md)** for the suggested development order and issue dependencies. This helps avoid blocked PRs and wasted effort.
+
+---
+
 ## Code of Conduct
 
 By participating in this project, you agree to abide by our [Code of Conduct](./CODE_OF_CONDUCT.md). Please treat everyone with respect.
@@ -53,8 +59,12 @@ By participating in this project, you agree to abide by our [Code of Conduct](./
 git clone https://github.com/ElioNeto/vyx.git
 cd vyx
 
-# Start core in development mode
-go run ./core/cmd/vyx dev
+# Build the CLI
+cd core && go build -o ../vyx.exe ./cmd/vyx
+
+# Start the hello-world example in development mode
+cd ../examples/hello-world
+../../vyx.exe dev
 ```
 
 ---
