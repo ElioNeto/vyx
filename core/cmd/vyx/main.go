@@ -29,6 +29,7 @@ import (
 	"github.com/ElioNeto/vyx/core/application/monitor"
 	doamincfg "github.com/ElioNeto/vyx/core/domain/config"
 	dgw "github.com/ElioNeto/vyx/core/domain/gateway"
+	"github.com/ElioNeto/vyx/core/domain/ipc"
 	infracfg "github.com/ElioNeto/vyx/core/infrastructure/config"
 	infragw "github.com/ElioNeto/vyx/core/infrastructure/gateway"
 	"github.com/ElioNeto/vyx/core/infrastructure/ipc/uds"
@@ -264,12 +265,30 @@ func runServer(devMode bool) {
 	cfgLoader.WithRouteMap(routeMapPath, rm)
 	log.Info("route map loaded", zap.String("path", routeMapPath))
 
-	// --- Infrastructure: UDS transport ---
+	// --- Infrastructure: IPC transport (UDS on Unix, Named Pipes on Windows) ---
+	//
+	// PlatformTransport() selects the correct implementation at compile time:
+	//   - Unix/macOS: uds.Transport  (listener.go)         – sockets in socketDir
+	//   - Windows:    uds.NamedPipeTransport (named_pipe_windows.go) – \\.\pipe\vyx-<id>
+	//
+	// On Unix we still honour the socketDir from vyx.yaml; on Windows Named Pipes
+	// are global and do not use the filesystem path, so socketDir is informational only.
+	var transport ipc.Transport
 	socketDir := cfg.IPC.SocketDir
 	if socketDir == "" {
 		socketDir = uds.DefaultSocketDir
 	}
-	transport := uds.New(socketDir)
+	if isWindows() {
+		transport = uds.NewNamedPipeTransport()
+		log.Info("IPC transport: Windows Named Pipes",
+			zap.String("pipe_prefix", `\\.\pipe\vyx-`),
+		)
+	} else {
+		transport = uds.New(socketDir)
+		log.Info("IPC transport: Unix Domain Sockets",
+			zap.String("socket_dir", socketDir),
+		)
+	}
 
 	// --- Core services ---
 	repo := repository.NewMemoryWorkerRepository()
@@ -328,12 +347,10 @@ func runServer(devMode bool) {
 	if devMode {
 		log.Info("vyx core starting in DEV mode",
 			zap.String("addr", gwCfg.Addr),
-			zap.String("socket_dir", socketDir),
 		)
 	} else {
 		log.Info("vyx core starting",
 			zap.String("addr", gwCfg.Addr),
-			zap.String("socket_dir", socketDir),
 		)
 	}
 
@@ -350,7 +367,7 @@ func runServer(devMode bool) {
 			}
 
 			if err := transport.Register(ctx, workerID); err != nil {
-				log.Error("failed to register UDS socket for worker",
+				log.Error("failed to register IPC socket for worker",
 					zap.String("worker_id", workerID), zap.Error(err))
 				continue
 			}
@@ -358,8 +375,17 @@ func runServer(devMode bool) {
 			args := parseArgs(wcfg.Command)
 			cmd := args[0]
 			cmdArgs := args[1:]
-			cmdArgs = append(cmdArgs, "--vyx-socket",
-				filepath.Join(socketDir, workerID+".sock"))
+
+			// Pass the IPC address to the worker.
+			// On Unix: --vyx-socket /tmp/vyx/<id>.sock
+			// On Windows: --vyx-socket \\.\pipe\vyx-<id>
+			if isWindows() {
+				cmdArgs = append(cmdArgs, "--vyx-socket",
+					`\\.\pipe\vyx-`+workerID)
+			} else {
+				cmdArgs = append(cmdArgs, "--vyx-socket",
+					filepath.Join(socketDir, workerID+".sock"))
+			}
 
 			spawnCtx := ctx
 			if wcfg.StartupTimeout > 0 {
@@ -417,7 +443,7 @@ func runServer(devMode bool) {
 		log.Error("HTTP server shutdown error", zap.Error(err))
 	}
 	if err := transport.Close(); err != nil {
-		log.Error("UDS transport close error", zap.Error(err))
+		log.Error("IPC transport close error", zap.Error(err))
 	}
 	if err := service.StopAll(shutdownCtx); err != nil {
 		log.Error("error during graceful shutdown", zap.Error(err))

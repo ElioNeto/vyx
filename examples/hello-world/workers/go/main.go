@@ -1,7 +1,7 @@
 // Go worker for the hello-world vyx example.
 //
-// This worker connects to the vyx core via Unix Domain Socket (UDS),
-// performs the handshake, and handles incoming requests.
+// This worker connects to the vyx core via Unix Domain Socket (UDS) on Unix
+// or via Named Pipe on Windows, performs the handshake, and handles requests.
 //
 // Annotated routes (parsed at build time by `vyx build`):
 //
@@ -21,6 +21,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 )
 
@@ -106,6 +107,17 @@ func readFull(conn net.Conn, buf []byte) (int, error) {
 	return total, nil
 }
 
+// dialSocket connects to the core via UDS (Unix) or Named Pipe (Windows).
+func dialSocket(socketPath string) (net.Conn, error) {
+	if runtime.GOOS == "windows" {
+		// On Windows the core passes \\.\pipe\vyx-<id> as --vyx-socket.
+		// net.Dial does not support the namedpipe scheme, so we use the
+		// platform-specific helper defined in dial_windows.go.
+		return dialNamedPipe(socketPath)
+	}
+	return net.Dial("unix", socketPath)
+}
+
 // ─── Route handlers ───────────────────────────────────────────────────────────
 
 // @Route(GET /api/hello)
@@ -163,10 +175,14 @@ func dispatch(req request) response {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 func main() {
-	socketPath := flag.String("vyx-socket", "/tmp/vyx/go:api.sock", "UDS socket path provided by vyx core")
+	defaultSocket := "/tmp/vyx/go:api.sock"
+	if runtime.GOOS == "windows" {
+		defaultSocket = `\\.\pipe\vyx-go:api`
+	}
+	socketPath := flag.String("vyx-socket", defaultSocket, "IPC address provided by vyx core")
 	flag.Parse()
 
-	conn, err := net.Dial("unix", *socketPath)
+	conn, err := dialSocket(*socketPath)
 	if err != nil {
 		log.Fatalf("[go:api] failed to connect to core: %v", err)
 	}
@@ -208,7 +224,6 @@ func main() {
 
 		switch f.MsgType {
 		case typeHeartbeat:
-			// Respond with a heartbeat
 			_ = writeFrame(conn, typeHeartbeat, nil)
 
 		case typeRequest:

@@ -1,8 +1,8 @@
 /**
  * Node.js worker for the hello-world vyx example.
  *
- * Connects to the vyx core via Unix Domain Socket (UDS),
- * performs the handshake, and handles incoming requests.
+ * Connects to the vyx core via Unix Domain Socket (UDS) on Unix/macOS
+ * or via Named Pipe on Windows, performs the handshake, and handles requests.
  *
  * Annotated routes (parsed at build time by `vyx build`):
  *
@@ -96,20 +96,23 @@ function dispatch(req) {
   return { status_code: 404, headers: { 'Content-Type': 'application/json' }, body: { error: 'route not found' } };
 }
 
-// ─── Main ─────────────────────────────────────────────────────────────────────
+// ─── Connection ───────────────────────────────────────────────────────────────
 
 const args = process.argv.slice(2);
-let socketPath = '/tmp/vyx/node:api.sock';
+let socketPath = process.platform === 'win32'
+  ? '\\\\.\\pipe\\vyx-node:api'
+  : '/tmp/vyx/node:api.sock';
+
 for (let i = 0; i < args.length - 1; i++) {
   if (args[i] === '--vyx-socket') socketPath = args[i + 1];
 }
 
 console.log(`[node:api] connecting to ${socketPath}`);
 
+// net.createConnection accepts a Named Pipe path on Windows transparently.
 const socket = net.createConnection(socketPath, () => {
   console.log('[node:api] connected to core');
 
-  // Handshake
   const handshake = {
     type: 'handshake',
     worker_id: 'node:api',
