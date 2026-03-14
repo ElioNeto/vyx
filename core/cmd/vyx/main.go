@@ -266,13 +266,6 @@ func runServer(devMode bool) {
 	log.Info("route map loaded", zap.String("path", routeMapPath))
 
 	// --- Infrastructure: IPC transport (UDS on Unix, Named Pipes on Windows) ---
-	//
-	// PlatformTransport() selects the correct implementation at compile time:
-	//   - Unix/macOS: uds.Transport  (listener.go)         – sockets in socketDir
-	//   - Windows:    uds.NamedPipeTransport (named_pipe_windows.go) – \\.\pipe\vyx-<id>
-	//
-	// On Unix we still honour the socketDir from vyx.yaml; on Windows Named Pipes
-	// are global and do not use the filesystem path, so socketDir is informational only.
 	var transport ipc.Transport
 	socketDir := cfg.IPC.SocketDir
 	if socketDir == "" {
@@ -332,7 +325,10 @@ func runServer(devMode bool) {
 	}
 	httpServer := infragw.New(gwCfg, dispatcher, rateLimiter, log)
 
-	hbCfg := heartbeat.Config{Interval: 5 * time.Second, MissedThreshold: 2}
+	// Use DefaultConfig to ensure ConnectGrace and RetryInterval are set.
+	// Instantiating heartbeat.Config{} manually would leave those fields as
+	// zero, disabling the grace-period logic added in issue #60.
+	hbCfg := heartbeat.DefaultConfig()
 
 	// --- Heartbeat sender (core → worker) ---
 	hbSender := heartbeat.NewSender(transport, repo, hbCfg, log)
@@ -377,8 +373,6 @@ func runServer(devMode bool) {
 			cmdArgs := args[1:]
 
 			// Pass the IPC address to the worker.
-			// On Unix: --vyx-socket /tmp/vyx/<id>.sock
-			// On Windows: --vyx-socket \\.\pipe\vyx-<id>
 			if isWindows() {
 				cmdArgs = append(cmdArgs, "--vyx-socket",
 					`\\.\pipe\vyx-`+workerID)
