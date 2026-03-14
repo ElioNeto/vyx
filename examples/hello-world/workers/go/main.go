@@ -14,6 +14,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -70,29 +71,31 @@ type response struct {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+// writeFrame encodes a frame using little-endian length prefix (4 bytes) +
+// msgType (1 byte) + payload, matching framing.go in the vyx core.
 func writeFrame(conn net.Conn, msgType uint8, payload []byte) error {
-	l := uint32(len(payload))
-	header := []byte{
-		byte(l >> 24), byte(l >> 16), byte(l >> 8), byte(l),
-		msgType,
-	}
+	header := make([]byte, 5)
+	binary.LittleEndian.PutUint32(header[0:4], uint32(len(payload)))
+	header[4] = msgType
 	_, err := conn.Write(append(header, payload...))
 	return err
 }
 
+// readFrame reads a little-endian framed message from conn.
 func readFrame(conn net.Conn) (frame, error) {
 	header := make([]byte, 5)
 	if _, err := readFull(conn, header); err != nil {
 		return frame{}, err
 	}
-	length := uint32(header[0])<<24 | uint32(header[1])<<16 | uint32(header[2])<<8 | uint32(header[3])
+	length := binary.LittleEndian.Uint32(header[0:4])
+	msgType := header[4]
 	payload := make([]byte, length)
 	if length > 0 {
 		if _, err := readFull(conn, payload); err != nil {
 			return frame{}, err
 		}
 	}
-	return frame{Length: length, MsgType: header[4], Payload: payload}, nil
+	return frame{Length: length, MsgType: msgType, Payload: payload}, nil
 }
 
 func readFull(conn net.Conn, buf []byte) (int, error) {
