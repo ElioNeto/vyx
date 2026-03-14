@@ -37,6 +37,12 @@ func (m *Manager) Spawn(ctx context.Context, w *worker.Worker) error {
 	cmd := exec.CommandContext(ctx, w.Command, w.Args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	// WorkDir allows workers with their own go.mod (or any sub-module) to be
+	// spawned with the correct working directory so tools like `go run` can
+	// locate the module root without walking up to the repo root.
+	if w.WorkDir != "" {
+		cmd.Dir = w.WorkDir
+	}
 	setProcAttr(cmd) // platform-specific: Setpgid on Unix, CREATE_NEW_PROCESS_GROUP on Windows
 
 	if err := cmd.Start(); err != nil {

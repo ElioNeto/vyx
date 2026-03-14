@@ -23,6 +23,7 @@ type Worker struct {
 	ID             string
 	Command        string
 	Args           []string
+	WorkDir        string    // optional: directory to run the command in
 	State          State
 	RestartCount   int
 	LastHeartbeat  time.Time

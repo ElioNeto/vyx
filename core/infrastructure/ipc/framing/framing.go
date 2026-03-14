@@ -69,7 +69,14 @@ func Read(r io.Reader) (ipc.Message, error) {
 
 func validateType(t ipc.MessageType) error {
 	switch t {
-	case ipc.TypeRequest, ipc.TypeResponse, ipc.TypeHeartbeat, ipc.TypeError:
+	case ipc.TypeRequest,
+		ipc.TypeResponse,
+		ipc.TypeHeartbeat,
+		ipc.TypeError,
+		ipc.TypeHandshake,
+		ipc.TypeWSOpen,
+		ipc.TypeWSMessage,
+		ipc.TypeWSClose:
 		return nil
 	}
 	return ipc.ErrUnknownMessageType

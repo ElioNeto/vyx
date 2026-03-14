@@ -22,10 +22,11 @@ const net = require('net');
 const process = require('process');
 
 // ─── IPC protocol constants ───────────────────────────────────────────────────
+// Must match core/domain/ipc/message.go
 const TYPE_REQUEST   = 0x01;
 const TYPE_RESPONSE  = 0x02;
 const TYPE_HEARTBEAT = 0x03;
-const TYPE_HANDSHAKE = 0x10;
+const TYPE_HANDSHAKE = 0x05; // was incorrectly 0x10
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

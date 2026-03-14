@@ -27,6 +27,7 @@ type ProjectConfig struct {
 type WorkerConfig struct {
 	ID              string        `yaml:"id"`
 	Command         string        `yaml:"command"`
+	WorkingDir      string        `yaml:"working_dir"`      // optional: directory to run the command in
 	Replicas        int           `yaml:"replicas"`
 	Strategy        string        `yaml:"strategy"`         // "round-robin" | "least-loaded"
 	StartupTimeout  time.Duration `yaml:"startup_timeout"`
