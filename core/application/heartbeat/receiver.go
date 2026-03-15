@@ -11,11 +11,6 @@ import (
 
 // Receiver starts one heartbeat.Loop per live worker and keeps the set of
 // running loops in sync with the worker repository.
-//
-// Design: Receiver is intentionally separate from Sender so that the two
-// traffic directions (core→worker and worker→core) can be reasoned about
-// independently. Receiver satisfies spec §5.4: "Workers send periodic
-// heartbeats every 5s to the core."
 type Receiver struct {
 	transport ipc.Transport
 	lister    WorkerLister
@@ -27,7 +22,8 @@ type Receiver struct {
 	running map[string]context.CancelFunc // workerID → loop cancel
 }
 
-// NewReceiver creates a Receiver wired with all required dependencies.
+// NewReceiver creates a Receiver. service may be nil at construction time
+// and set later via SetService (used to break circular dependency in main).
 func NewReceiver(
 	transport ipc.Transport,
 	lister WorkerLister,
@@ -45,11 +41,21 @@ func NewReceiver(
 	}
 }
 
+// SetService wires the lifecycle service after construction.
+// Call this before Run/StartLoop to break the circular dependency:
+//
+//	hbReceiver := heartbeat.NewReceiver(transport, repo, nil, cfg, log)
+//	service    := lifecycle.NewService(repo, manager, pub, transport, hbReceiver)
+//	hbReceiver.SetService(service)
+func (r *Receiver) SetService(svc LifecycleService) {
+	r.mu.Lock()
+	r.service = svc
+	r.mu.Unlock()
+}
+
 // Run reconciles the set of running heartbeat loops with the live worker list
-// on every tick. New workers get a loop; workers that disappeared have their
-// loop cancelled. Blocks until ctx is cancelled.
+// on every tick. Blocks until ctx is cancelled.
 func (r *Receiver) Run(ctx context.Context) {
-	// Kick off loops for workers that are already alive at startup.
 	r.reconcile(ctx)
 
 	ticker := newTicker(r.cfg.Interval)
@@ -66,15 +72,31 @@ func (r *Receiver) Run(ctx context.Context) {
 	}
 }
 
-// StartLoop manually starts a heartbeat read loop for workerID. This is the
-// hook called by main.go right after a worker is spawned so we do not have to
-// wait for the next reconcile tick.
+// StartLoop starts a heartbeat read loop for workerID if one is not already
+// running. Called by main after the initial spawn.
 func (r *Receiver) StartLoop(ctx context.Context, workerID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if _, ok := r.running[workerID]; ok {
 		return // loop already running
+	}
+	r.launchLocked(ctx, workerID)
+}
+
+// RestartLoop cancels any existing loop for workerID and immediately starts a
+// fresh one. Used after a worker restart so the new Named Pipe / UDS
+// connection is picked up instead of the stale handle from the previous run.
+func (r *Receiver) RestartLoop(ctx context.Context, workerID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if cancel, ok := r.running[workerID]; ok {
+		cancel()
+		delete(r.running, workerID)
+		r.log.Info("heartbeat receiver: cancelled old loop before restart",
+			zap.String("worker_id", workerID),
+		)
 	}
 	r.launchLocked(ctx, workerID)
 }
@@ -96,14 +118,12 @@ func (r *Receiver) reconcile(ctx context.Context) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// Start loops for newly appeared workers.
 	for id := range live {
 		if _, ok := r.running[id]; !ok {
 			r.launchLocked(ctx, id)
 		}
 	}
 
-	// Cancel loops for workers that are no longer in the live set.
 	for id, cancel := range r.running {
 		if _, ok := live[id]; !ok {
 			cancel()

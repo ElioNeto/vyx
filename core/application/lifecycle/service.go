@@ -1,5 +1,4 @@
 // Package lifecycle contains the application use cases for worker lifecycle management.
-// This layer orchestrates domain entities using the interfaces defined in the domain.
 package lifecycle
 
 import (
@@ -13,10 +12,10 @@ import (
 // ReceiverStarter is the subset of heartbeat.Receiver used by the lifecycle
 // service to re-arm the read loop after a worker restart.
 type ReceiverStarter interface {
-	StartLoop(ctx context.Context, workerID string)
+	RestartLoop(ctx context.Context, workerID string)
 }
 
-// Service implements all use cases related to worker lifecycle.
+// Service implements all use cases related to worker lifecycle management.
 type Service struct {
 	repo      worker.Repository
 	manager   worker.Manager
@@ -25,7 +24,7 @@ type Service struct {
 	receiver  ReceiverStarter
 }
 
-// NewService constructs a lifecycle Service with all required dependencies injected.
+// NewService constructs a lifecycle Service.
 func NewService(
 	repo worker.Repository,
 	manager worker.Manager,
@@ -140,7 +139,7 @@ func (s *Service) RecordHeartbeat(ctx context.Context, id string) error {
 	return s.repo.Save(ctx, w)
 }
 
-// MarkUnhealthy transitions a worker to the unhealthy state (missed heartbeat).
+// MarkUnhealthy transitions a worker to the unhealthy state.
 func (s *Service) MarkUnhealthy(ctx context.Context, id string) error {
 	w, err := s.repo.FindByID(ctx, id)
 	if err != nil {
@@ -177,8 +176,8 @@ func (s *Service) MarkRunning(ctx context.Context, id string) error {
 }
 
 // RestartWorker stops and re-spawns a worker (called by the monitor after backoff).
-// It also recreates the IPC transport endpoint so the worker process can
-// reconnect after restart (Named Pipe on Windows, UDS on Unix).
+// It recreates the IPC endpoint and re-arms the heartbeat read loop so the
+// restarted process can reconnect on its fresh Named Pipe / UDS handle.
 func (s *Service) RestartWorker(ctx context.Context, id string) error {
 	w, err := s.repo.FindByID(ctx, id)
 	if err != nil {
@@ -196,9 +195,7 @@ func (s *Service) RestartWorker(ctx context.Context, id string) error {
 
 	_ = s.manager.Stop(ctx, id)
 
-	// Recreate the IPC endpoint so the restarted worker process can connect.
-	// Without this, the Named Pipe handle (Windows) or UDS file (Unix) is
-	// stale and the acceptPipe goroutine is no longer listening.
+	// Recreate the IPC endpoint so the restarted worker can connect.
 	if s.transport != nil {
 		_ = s.transport.Deregister(ctx, id)
 		if err := s.transport.Register(ctx, id); err != nil {
@@ -225,7 +222,7 @@ func (s *Service) RestartWorker(ctx context.Context, id string) error {
 
 	// Re-arm the heartbeat read loop for the new connection.
 	if s.receiver != nil {
-		s.receiver.StartLoop(ctx, id)
+		s.receiver.RestartLoop(ctx, id)
 	}
 
 	return nil
