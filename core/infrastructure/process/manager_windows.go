@@ -9,29 +9,32 @@ import (
 )
 
 func setProcAttr(cmd *exec.Cmd) {
-	// On Windows, Setpgid does not exist. CREATE_NEW_PROCESS_GROUP is the
-	// equivalent: it isolates the child so Ctrl+C is not propagated.
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
 	}
 }
 
-// isAccessDenied returns true for the Windows "Access is denied" error that
-// TerminateProcess returns when the target process has already exited.
-func isAccessDenied(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "Access is denied")
+// isKillError returns true for Windows errors that mean the process is already
+// gone: "Access is denied" (TerminateProcess on exited process) and
+// "invalid argument" (handle already closed by a previous Wait/Kill call).
+func isKillError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "Access is denied") ||
+		strings.Contains(s, "invalid argument")
 }
 
 func stopProcess(cmd *exec.Cmd) error {
-	// Windows has no SIGTERM; Kill is the only reliable termination signal.
-	if err := cmd.Process.Kill(); err != nil && !isAccessDenied(err) {
+	if err := cmd.Process.Kill(); err != nil && !isKillError(err) {
 		return err
 	}
 	return nil
 }
 
 func killProcess(cmd *exec.Cmd) error {
-	if err := cmd.Process.Kill(); err != nil && !isAccessDenied(err) {
+	if err := cmd.Process.Kill(); err != nil && !isKillError(err) {
 		return err
 	}
 	return nil

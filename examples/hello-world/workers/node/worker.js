@@ -26,32 +26,23 @@ const process = require('process');
 const TYPE_REQUEST   = 0x01;
 const TYPE_RESPONSE  = 0x02;
 const TYPE_HEARTBEAT = 0x03;
-const TYPE_HANDSHAKE = 0x05; // was incorrectly 0x10
+const TYPE_HANDSHAKE = 0x05;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/**
- * Write a framed message.
- * Frame layout: [Length 4B LE][Type 1B][Payload NB]
- * Must match binary.LittleEndian used in framing.go.
- */
 function writeFrame(socket, msgType, payload) {
   const payloadBuf = payload ? Buffer.from(JSON.stringify(payload)) : Buffer.alloc(0);
   const header = Buffer.alloc(5);
-  header.writeUInt32LE(payloadBuf.length, 0); // little-endian — matches framing.go
+  header.writeUInt32LE(payloadBuf.length, 0);
   header.writeUInt8(msgType, 4);
   socket.write(Buffer.concat([header, payloadBuf]));
 }
 
-/**
- * Parse as many complete frames as possible from buffer.
- * Length field is 4 bytes LE (matches binary.LittleEndian in framing.go).
- */
 function parseFrames(buffer) {
   const frames = [];
   let offset = 0;
   while (offset + 5 <= buffer.length) {
-    const length = buffer.readUInt32LE(offset); // little-endian — matches framing.go
+    const length = buffer.readUInt32LE(offset);
     const msgType = buffer.readUInt8(offset + 4);
     if (offset + 5 + length > buffer.length) break;
     const payload = buffer.slice(offset + 5, offset + 5 + length);
@@ -122,10 +113,10 @@ for (let i = 0; i < args.length - 1; i++) {
 
 console.log(`[node:api] connecting to ${socketPath}`);
 
-// net.createConnection supports Named Pipe paths on Windows natively.
 const socket = net.createConnection(socketPath, () => {
   console.log('[node:api] connected to core');
 
+  // Send handshake.
   const handshake = {
     type: 'handshake',
     worker_id: 'node:api',
@@ -136,6 +127,11 @@ const socket = net.createConnection(socketPath, () => {
   };
   writeFrame(socket, TYPE_HANDSHAKE, handshake);
   console.log('[node:api] handshake sent');
+
+  // Send an immediate heartbeat so the core marks this worker healthy
+  // before the first 5-second monitor tick fires.
+  writeFrame(socket, TYPE_HEARTBEAT, null);
+  console.log('[node:api] initial heartbeat sent');
 });
 
 let buffer = Buffer.alloc(0);
@@ -148,6 +144,7 @@ socket.on('data', (data) => {
   for (const { msgType, payload } of frames) {
     switch (msgType) {
       case TYPE_HEARTBEAT:
+        // Echo the ping back to the core.
         writeFrame(socket, TYPE_HEARTBEAT, null);
         break;
 
@@ -161,7 +158,6 @@ socket.on('data', (data) => {
       }
 
       default:
-        // Unknown type — ignore silently (forward compat)
         break;
     }
   }
