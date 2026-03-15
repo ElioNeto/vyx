@@ -26,7 +26,8 @@ func NewService(repo worker.Repository, manager worker.Manager, publisher worker
 }
 
 // SpawnWorker registers a new worker and starts its process.
-func (s *Service) SpawnWorker(ctx context.Context, id, command string, args []string) (*worker.Worker, error) {
+// workDir is optional: when non-empty the child process is started in that directory.
+func (s *Service) SpawnWorker(ctx context.Context, id, command string, args []string, workDir string) (*worker.Worker, error) {
 	if command == "" {
 		return nil, worker.ErrInvalidCommand
 	}
@@ -35,6 +36,7 @@ func (s *Service) SpawnWorker(ctx context.Context, id, command string, args []st
 		ID:        id,
 		Command:   command,
 		Args:      args,
+		WorkDir:   workDir,
 		State:     worker.StateStarting,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),

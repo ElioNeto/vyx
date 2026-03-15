@@ -326,8 +326,6 @@ func runServer(devMode bool) {
 	httpServer := infragw.New(gwCfg, dispatcher, rateLimiter, log)
 
 	// Use DefaultConfig to ensure ConnectGrace and RetryInterval are set.
-	// Instantiating heartbeat.Config{} manually would leave those fields as
-	// zero, disabling the grace-period logic added in issue #60.
 	hbCfg := heartbeat.DefaultConfig()
 
 	// --- Heartbeat sender (core → worker) ---
@@ -388,7 +386,7 @@ func runServer(devMode bool) {
 				defer cancel()
 			}
 
-			w, err := service.SpawnWorker(spawnCtx, workerID, cmd, cmdArgs)
+			w, err := service.SpawnWorker(spawnCtx, workerID, cmd, cmdArgs, wcfg.WorkingDir)
 			if err != nil {
 				log.Error("failed to spawn worker",
 					zap.String("worker_id", workerID),
