@@ -26,6 +26,7 @@ import (
 type LifecycleService interface {
 	RecordHeartbeat(ctx context.Context, workerID string) error
 	MarkUnhealthy(ctx context.Context, workerID string) error
+	MarkRunning(ctx context.Context, workerID string) error
 }
 
 // Config holds tuning parameters for the heartbeat loop.
@@ -105,6 +106,11 @@ func New(
 // "ipc: worker is not connected" do NOT count as missed heartbeats; the loop
 // sleeps RetryInterval and retries. This prevents premature unhealthy marking
 // while the worker process is still dialing the IPC socket.
+//
+// Handshake race: the loop may receive a TypeHandshake frame if the worker
+// connects after StartLoop has already been called. In that case we treat the
+// handshake as a successful connection event: reset missed, call MarkRunning,
+// and continue reading normally.
 func (l *Loop) Run(ctx context.Context) {
 	missed := 0
 	startTime := time.Now()
@@ -161,6 +167,16 @@ func (l *Loop) Run(ctx context.Context) {
 		}
 
 		switch msg.Type {
+		case ipc.TypeHandshake:
+			// The worker connected after StartLoop was already running.
+			// Treat the handshake as a successful connection: reset missed
+			// counter and confirm the worker is running.
+			missed = 0
+			l.log.Info("handshake received on heartbeat loop — worker connected",
+				zap.String("worker_id", l.workerID),
+			)
+			_ = l.service.MarkRunning(ctx, l.workerID)
+
 		case ipc.TypeHeartbeat:
 			missed = 0
 			if err := l.service.RecordHeartbeat(ctx, l.workerID); err != nil {

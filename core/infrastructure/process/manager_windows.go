@@ -4,6 +4,7 @@ package process
 
 import (
 	"os/exec"
+	"strings"
 	"syscall"
 )
 
@@ -15,11 +16,23 @@ func setProcAttr(cmd *exec.Cmd) {
 	}
 }
 
+// isAccessDenied returns true for the Windows "Access is denied" error that
+// TerminateProcess returns when the target process has already exited.
+func isAccessDenied(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "Access is denied")
+}
+
 func stopProcess(cmd *exec.Cmd) error {
 	// Windows has no SIGTERM; Kill is the only reliable termination signal.
-	return cmd.Process.Kill()
+	if err := cmd.Process.Kill(); err != nil && !isAccessDenied(err) {
+		return err
+	}
+	return nil
 }
 
 func killProcess(cmd *exec.Cmd) error {
-	return cmd.Process.Kill()
+	if err := cmd.Process.Kill(); err != nil && !isAccessDenied(err) {
+		return err
+	}
+	return nil
 }
