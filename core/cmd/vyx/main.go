@@ -287,7 +287,18 @@ func runServer(devMode bool) {
 	repo := repository.NewMemoryWorkerRepository()
 	manager := process.New()
 	publisher := logger.New(log)
-	service := lifecycle.NewService(repo, manager, publisher)
+
+	// hbReceiver is created before lifecycle.Service so it can be passed in.
+	hbCfg := heartbeat.DefaultConfig()
+	hbReceiver := heartbeat.NewReceiver(transport, repo, nil, hbCfg, log)
+
+	// lifecycle.Service needs the transport (to re-register on restart) and
+	// the receiver (to re-arm the heartbeat loop after restart).
+	service := lifecycle.NewService(repo, manager, publisher, transport, hbReceiver)
+
+	// Now wire the service back into the receiver (it needs service for MarkRunning etc).
+	hbReceiver.SetService(service)
+
 	healthMonitor := monitor.New(service, repo)
 
 	// --- JWT + Schema validators ---
@@ -325,14 +336,8 @@ func runServer(devMode bool) {
 	}
 	httpServer := infragw.New(gwCfg, dispatcher, rateLimiter, log)
 
-	// Use DefaultConfig to ensure ConnectGrace and RetryInterval are set.
-	hbCfg := heartbeat.DefaultConfig()
-
 	// --- Heartbeat sender (core → worker) ---
 	hbSender := heartbeat.NewSender(transport, repo, hbCfg, log)
-
-	// --- Heartbeat receiver (worker → core) ---
-	hbReceiver := heartbeat.NewReceiver(transport, repo, service, hbCfg, log)
 
 	// --- Context + signal handling ---
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -370,7 +375,6 @@ func runServer(devMode bool) {
 			cmd := args[0]
 			cmdArgs := args[1:]
 
-			// Pass the IPC address to the worker.
 			if isWindows() {
 				cmdArgs = append(cmdArgs, "--vyx-socket",
 					`\\.\pipe\vyx-`+workerID)
@@ -401,7 +405,6 @@ func runServer(devMode bool) {
 				zap.Int("replica", i),
 			)
 
-			// Start the worker→core heartbeat read loop immediately.
 			hbReceiver.StartLoop(ctx, w.ID)
 		}
 	}
@@ -412,7 +415,6 @@ func runServer(devMode bool) {
 	go hbSender.Run(ctx)
 	go hbReceiver.Run(ctx)
 
-	// Start HTTP server.
 	go func() {
 		var srvErr error
 		if gwCfg.TLSCertFile != "" {
