@@ -12,7 +12,8 @@ import (
 
 // dialNamedPipe connects to a Windows Named Pipe and returns a net.Conn.
 // path must be in the form \\.\pipe\<name>.
-// It retries up to 10 times (500 ms apart) waiting for the core to create the pipe.
+// It retries up to 20 times (500 ms apart) waiting for the core to call
+// ConnectNamedPipe and make the pipe ready for a client connection.
 func dialNamedPipe(path string) (net.Conn, error) {
 	pathPtr, err := windows.UTF16PtrFromString(path)
 	if err != nil {
@@ -20,16 +21,12 @@ func dialNamedPipe(path string) (net.Conn, error) {
 	}
 
 	const (
-		maxAttempts = 10
+		maxAttempts = 20
 		retryDelay  = 500 * time.Millisecond
 	)
 
 	var handle windows.Handle
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		// WaitNamedPipe blocks until an instance is available (up to 2 s per call).
-		waitPtr, _ := windows.UTF16PtrFromString(path)
-		_ = windows.WaitNamedPipe(waitPtr, 2000)
-
 		handle, err = windows.CreateFile(
 			pathPtr,
 			windows.GENERIC_READ|windows.GENERIC_WRITE,
@@ -81,9 +78,9 @@ func (c *pipeConn) Close() error {
 	return windows.CloseHandle(c.handle)
 }
 
-func (c *pipeConn) LocalAddr() net.Addr               { return pipeNetAddr(c.path) }
-func (c *pipeConn) RemoteAddr() net.Addr              { return pipeNetAddr(c.path) }
-func (c *pipeConn) SetDeadline(_ time.Time) error     { return nil }
+func (c *pipeConn) LocalAddr() net.Addr                { return pipeNetAddr(c.path) }
+func (c *pipeConn) RemoteAddr() net.Addr               { return pipeNetAddr(c.path) }
+func (c *pipeConn) SetDeadline(_ time.Time) error      { return nil }
 func (c *pipeConn) SetReadDeadline(_ time.Time) error  { return nil }
 func (c *pipeConn) SetWriteDeadline(_ time.Time) error { return nil }
 

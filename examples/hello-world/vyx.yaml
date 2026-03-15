@@ -7,7 +7,7 @@ workers:
     command: go-api.exe
     replicas: 1
     strategy: round-robin
-    startup_timeout: 30s
+    startup_timeout: 10s
     shutdown_timeout: 5s
 
   - id: node:api
