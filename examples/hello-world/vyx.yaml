@@ -4,7 +4,7 @@ project:
 
 workers:
   - id: go:api
-    command: go-api.exe
+    command: ./go-api.exe
     replicas: 1
     strategy: round-robin
     startup_timeout: 10s
