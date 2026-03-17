@@ -372,7 +372,7 @@ func runServer(devMode bool) {
 			}
 
 			args := parseArgs(wcfg.Command)
-			cmd := args[0]
+			cmd := resolveCommand(args[0])
 			cmdArgs := args[1:]
 
 			if isWindows() {
@@ -464,6 +464,30 @@ func mustLoadConfig() *doamincfg.Config {
 
 func parseArgs(command string) []string {
 	return strings.Fields(command)
+}
+
+// resolveCommand converts a command token into an executable path that Go's
+// exec package will accept on all platforms.
+//
+// On Windows, exec.LookPath refuses to run a binary found only in the current
+// directory (Go 1.19+ security hardening). Converting a bare name or a
+// "./"-prefixed token to an absolute path bypasses that restriction while
+// keeping the behaviour correct on Unix as well.
+func resolveCommand(cmd string) string {
+	// Already absolute — nothing to do.
+	if filepath.IsAbs(cmd) {
+		return cmd
+	}
+	// Relative path (starts with ./ or .\) or bare name that lives in CWD:
+	// resolve to absolute so exec.Command never hits the Windows dot-directory block.
+	if abs, err := filepath.Abs(cmd); err == nil {
+		if _, statErr := os.Stat(abs); statErr == nil {
+			return abs
+		}
+	}
+	// Fall back to the original token (e.g. "node", "python") so exec.LookPath
+	// can find it on PATH as usual.
+	return cmd
 }
 
 func fatalf(format string, args ...any) {
