@@ -26,14 +26,14 @@ import (
 	"syscall"
 )
 
-// ─── IPC protocol types (mirrors core/domain/ipc) ────────────────────────────
+// ─── IPC protocol types (mirrors core/domain/ipc/message.go) ─────────────────
 
 const (
 	typeRequest   = 0x01
 	typeResponse  = 0x02
 	typeHeartbeat = 0x03
 	typeError     = 0x04
-	typeHandshake = 0x10
+	typeHandshake = 0x05 // must match ipc.TypeHandshake in core/domain/ipc/message.go
 )
 
 type frame struct {
@@ -42,8 +42,9 @@ type frame struct {
 	Payload []byte
 }
 
+// handshakePayload mirrors ipc.HandshakePayload in core/domain/ipc/message.go.
+// Note: no "type" field — the frame type byte already encodes the message kind.
 type handshakePayload struct {
-	Type         string       `json:"type"`
 	WorkerID     string       `json:"worker_id"`
 	Capabilities []capability `json:"capabilities"`
 }
@@ -192,9 +193,8 @@ func main() {
 	defer conn.Close()
 	log.Printf("[go:api] connected to core via %s", *socketPath)
 
-	// Handshake
+	// Handshake — payload mirrors ipc.HandshakePayload (no "type" field).
 	handshake := handshakePayload{
-		Type:     "handshake",
 		WorkerID: "go:api",
 		Capabilities: []capability{
 			{Path: "/api/hello", Method: "GET"},
