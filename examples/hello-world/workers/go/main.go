@@ -207,6 +207,13 @@ func main() {
 	}
 	log.Printf("[go:api] handshake sent")
 
+	// Send an immediate heartbeat so the core marks this worker healthy
+	// before the first 5-second heartbeat sender tick fires.
+	if err := writeFrame(conn, typeHeartbeat, nil); err != nil {
+		log.Fatalf("[go:api] initial heartbeat failed: %v", err)
+	}
+	log.Printf("[go:api] initial heartbeat sent")
+
 	// Signal handling
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
