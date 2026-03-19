@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -23,6 +24,14 @@ const (
 	namedPipePrefix = `\\.\pipe\vyx-`
 	pipeBufferSize  = 65536
 )
+
+// disconnectNamedPipe wraps the kernel32 function not exposed by x/sys/windows.
+var disconnectNamedPipe = syscall.NewLazyDLL("kernel32.dll").NewProc("DisconnectNamedPipe")
+
+func callDisconnectNamedPipe(h windows.Handle) {
+	// Return values intentionally ignored — best-effort disconnect.
+	_, _, _ = disconnectNamedPipe.Call(uintptr(h))
+}
 
 // windowsConn wraps a net.Conn with a per-connection write mutex.
 type windowsConn struct {
@@ -204,10 +213,11 @@ func (c *handleConn) Write(b []byte) (int, error) {
 func (c *handleConn) Close() error {
 	var closeErr error
 	c.once.Do(func() {
-		// Flush and disconnect before closing so the client side gets a
-		// clean EOF rather than a broken-pipe error.
+		// Flush and disconnect before closing so the client side receives a
+		// clean EOF rather than a broken-pipe error, and the OS fully
+		// recycles the pipe instance before the next CreateNamedPipe call.
 		_ = windows.FlushFileBuffers(c.handle)
-		_ = windows.DisconnectNamedPipe(c.handle)
+		callDisconnectNamedPipe(c.handle)
 		closeErr = windows.CloseHandle(c.handle)
 	})
 	return closeErr
