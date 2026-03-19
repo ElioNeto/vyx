@@ -70,6 +70,7 @@ func (s *Service) SpawnWorker(ctx context.Context, id, command string, args []st
 	}
 
 	w.State = worker.StateRunning
+	w.LastHeartbeat = time.Now()
 	w.UpdatedAt = time.Now()
 	_ = s.repo.Save(ctx, w)
 	s.publish(ctx, worker.EventRunning, w, "")
@@ -170,6 +171,7 @@ func (s *Service) MarkRunning(ctx context.Context, id string) error {
 	}
 
 	w.State = worker.StateRunning
+	w.LastHeartbeat = time.Now()
 	w.UpdatedAt = time.Now()
 	s.publish(ctx, worker.EventRunning, w, "handshake complete")
 	return s.repo.Save(ctx, w)

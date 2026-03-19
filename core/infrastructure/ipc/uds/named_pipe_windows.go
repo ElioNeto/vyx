@@ -156,6 +156,9 @@ func (t *NamedPipeTransport) acceptPipe(ctx context.Context, workerID string, l 
 	c := newHandleConn(l.handle, l.path)
 	t.mu.Lock()
 	t.connections[workerID] = &windowsConn{Conn: c}
+	// Mark the listener handle as invalid so Deregister does not
+	// double-close the same OS handle (connection now owns it).
+	l.handle = windows.InvalidHandle
 	t.mu.Unlock()
 }
 
@@ -244,7 +247,9 @@ func (t *NamedPipeTransport) Deregister(_ context.Context, workerID string) erro
 		delete(t.connections, workerID)
 	}
 	if l, ok := t.listeners[workerID]; ok {
-		_ = windows.CloseHandle(l.handle)
+		if l.handle != windows.InvalidHandle {
+			_ = windows.CloseHandle(l.handle)
+		}
 		delete(t.listeners, workerID)
 	}
 	return nil

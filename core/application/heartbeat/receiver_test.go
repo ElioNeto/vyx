@@ -89,6 +89,10 @@ func (f *fakeService) MarkUnhealthy(_ context.Context, workerID string) error {
 	return nil
 }
 
+func (f *fakeService) MarkRunning(_ context.Context, _ string) error {
+	return nil
+}
+
 // ─── tests ───────────────────────────────────────────────────────────────────
 
 func TestReceiver_StartLoop_RecordsHeartbeat(t *testing.T) {

@@ -41,7 +41,7 @@ func (p *mockPublisher) Publish(_ context.Context, e worker.Event) {
 func newTestService(manager worker.Manager) (*lifecycle.Service, *mockPublisher) {
 	repo := newMemRepo()
 	pub := &mockPublisher{}
-	return lifecycle.NewService(repo, manager, pub), pub
+	return lifecycle.NewService(repo, manager, pub, nil, nil), pub
 }
 
 // minimal in-memory repo for tests
@@ -67,7 +67,7 @@ func TestSpawnWorker_Success(t *testing.T) {
 	mgr := &mockManager{}
 	svc, pub := newTestService(mgr)
 
-	w, err := svc.SpawnWorker(context.Background(), "node:api", "node", []string{"worker.js"})
+	w, err := svc.SpawnWorker(context.Background(), "node:api", "node", []string{"worker.js"}, "")
 
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -87,7 +87,7 @@ func TestSpawnWorker_EmptyCommand(t *testing.T) {
 	mgr := &mockManager{}
 	svc, _ := newTestService(mgr)
 
-	_, err := svc.SpawnWorker(context.Background(), "node:api", "", nil)
+	_, err := svc.SpawnWorker(context.Background(), "node:api", "", nil, "")
 
 	if err != worker.ErrInvalidCommand {
 		t.Errorf("expected ErrInvalidCommand, got %v", err)
@@ -98,7 +98,7 @@ func TestSpawnWorker_SpawnFailure(t *testing.T) {
 	mgr := &mockManager{spawnErr: worker.ErrSpawnFailed}
 	svc, _ := newTestService(mgr)
 
-	_, err := svc.SpawnWorker(context.Background(), "node:api", "node", nil)
+	_, err := svc.SpawnWorker(context.Background(), "node:api", "node", nil, "")
 
 	if err != worker.ErrSpawnFailed {
 		t.Errorf("expected ErrSpawnFailed, got %v", err)
@@ -109,7 +109,7 @@ func TestStopWorker_Success(t *testing.T) {
 	mgr := &mockManager{}
 	svc, _ := newTestService(mgr)
 
-	_, _ = svc.SpawnWorker(context.Background(), "node:api", "node", nil)
+	_, _ = svc.SpawnWorker(context.Background(), "node:api", "node", nil, "")
 	err := svc.StopWorker(context.Background(), "node:api")
 
 	if err != nil {
@@ -135,7 +135,7 @@ func TestRecordHeartbeat_UpdatesTimestamp(t *testing.T) {
 	mgr := &mockManager{}
 	svc, _ := newTestService(mgr)
 
-	_, _ = svc.SpawnWorker(context.Background(), "node:api", "node", nil)
+	_, _ = svc.SpawnWorker(context.Background(), "node:api", "node", nil, "")
 	err := svc.RecordHeartbeat(context.Background(), "node:api")
 
 	if err != nil {
@@ -147,7 +147,7 @@ func TestRestartWorker_IncrementsRestartCount(t *testing.T) {
 	mgr := &mockManager{}
 	svc, _ := newTestService(mgr)
 
-	_, _ = svc.SpawnWorker(context.Background(), "node:api", "node", nil)
+	_, _ = svc.SpawnWorker(context.Background(), "node:api", "node", nil, "")
 	_ = svc.MarkUnhealthy(context.Background(), "node:api")
 	err := svc.RestartWorker(context.Background(), "node:api")
 

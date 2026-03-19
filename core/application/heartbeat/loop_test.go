@@ -64,6 +64,10 @@ func (s *mockService) MarkUnhealthy(_ context.Context, _ string) error {
 	return nil
 }
 
+func (s *mockService) MarkRunning(_ context.Context, _ string) error {
+	return nil
+}
+
 // --- Tests ---
 
 func TestLoop_HeartbeatReceived_CallsRecordHeartbeat(t *testing.T) {
