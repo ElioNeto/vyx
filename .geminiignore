@@ -1,0 +1,50 @@
+# .geminiignore
+# Files and directories to be ignored by Gemini AI tools
+
+# Binaries
+*.exe
+*.out
+*.o
+*.a
+*.so
+*.dll
+
+# Build output
+bin/
+dist/
+build/
+out/
+
+# Dependencies
+vendor/
+
+# Test artifacts
+*.test
+coverage.out
+coverage.html
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment and secrets
+.env
+.env.*
+*.pem
+*.key
+*.cert
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
