@@ -198,8 +198,14 @@ func (s *Service) RestartWorker(ctx context.Context, id string) error {
 	_ = s.manager.Stop(ctx, id)
 
 	// Recreate the IPC endpoint so the restarted worker can connect.
+	// The small sleep between Deregister and Register gives the OS time to
+	// fully recycle the previous pipe handle before we call CreateNamedPipe
+	// again with the same name. Without this gap the new ConnectNamedPipe
+	// goroutine can race with the dying worker process and inherit its
+	// broken handle — producing the "pipe has been ended" loop.
 	if s.transport != nil {
 		_ = s.transport.Deregister(ctx, id)
+		time.Sleep(5 * time.Millisecond)
 		if err := s.transport.Register(ctx, id); err != nil {
 			w.State = worker.StateStopped
 			w.UpdatedAt = time.Now()

@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	namedPipePrefix  = `\\.\pipe\vyx-`
-	pipeBufferSize   = 65536
+	namedPipePrefix = `\\.\pipe\vyx-`
+	pipeBufferSize  = 65536
 )
 
 // windowsConn wraps a net.Conn with a per-connection write mutex.
@@ -68,10 +68,7 @@ func createSecureNamedPipe(path string) (windows.Handle, error) {
 		return windows.InvalidHandle, fmt.Errorf("named pipe: GetTokenUser: %w", err)
 	}
 
-	// Sid.String() returns only the string value (no error).
 	userSIDStr := user.User.Sid.String()
-
-	// SDDL: owner = user, DACL allows only the user GENERIC_ALL access.
 	sddl := fmt.Sprintf("O:%sD:(A;;GA;;;%s)", userSIDStr, userSIDStr)
 	sd, err := windows.SecurityDescriptorFromString(sddl)
 	if err != nil {
@@ -114,7 +111,7 @@ func createSecureNamedPipe(path string) (windows.Handle, error) {
 }
 
 // Register creates a Named Pipe for workerID and spawns a goroutine to accept
-// exactly one connection.
+// exactly one connection. Safe to call again after Deregister (restart path).
 func (t *NamedPipeTransport) Register(ctx context.Context, workerID string) error {
 	path := pipePath(workerID)
 
@@ -126,6 +123,12 @@ func (t *NamedPipeTransport) Register(ctx context.Context, workerID string) erro
 	l := &namedPipeListener{path: path, handle: handle}
 
 	t.mu.Lock()
+	// Clear any stale connection entry left by a previous run so that
+	// getConn never returns a closed handle while acceptPipe is in flight.
+	if old, ok := t.connections[workerID]; ok {
+		_ = old.Close()
+		delete(t.connections, workerID)
+	}
 	t.listeners[workerID] = l
 	t.mu.Unlock()
 
@@ -134,21 +137,27 @@ func (t *NamedPipeTransport) Register(ctx context.Context, workerID string) erro
 }
 
 func (t *NamedPipeTransport) acceptPipe(ctx context.Context, workerID string, l *namedPipeListener) {
-	ch := make(chan error, 1)
+	type result struct{ err error }
+	ch := make(chan result, 1)
+
 	go func() {
 		err := windows.ConnectNamedPipe(l.handle, nil)
 		if err == windows.ERROR_PIPE_CONNECTED {
 			err = nil
 		}
-		ch <- err
+		ch <- result{err}
 	}()
 
 	select {
 	case <-ctx.Done():
 		windows.CloseHandle(l.handle)
 		return
-	case err := <-ch:
-		if err != nil {
+	case r := <-ch:
+		if r.err != nil {
+			// ConnectNamedPipe failed — close this handle and bail.
+			// The next Register call (triggered by a worker restart) will
+			// create a fresh handle and try again.
+			windows.CloseHandle(l.handle)
 			return
 		}
 	}
@@ -156,8 +165,8 @@ func (t *NamedPipeTransport) acceptPipe(ctx context.Context, workerID string, l 
 	c := newHandleConn(l.handle, l.path)
 	t.mu.Lock()
 	t.connections[workerID] = &windowsConn{Conn: c}
-	// Mark the listener handle as invalid so Deregister does not
-	// double-close the same OS handle (connection now owns it).
+	// The OS handle is now owned by handleConn — mark listener as consumed
+	// so Deregister does not double-close it.
 	l.handle = windows.InvalidHandle
 	t.mu.Unlock()
 }
@@ -195,8 +204,10 @@ func (c *handleConn) Write(b []byte) (int, error) {
 func (c *handleConn) Close() error {
 	var closeErr error
 	c.once.Do(func() {
-		// Flush remaining data before closing.
+		// Flush and disconnect before closing so the client side gets a
+		// clean EOF rather than a broken-pipe error.
 		_ = windows.FlushFileBuffers(c.handle)
+		_ = windows.DisconnectNamedPipe(c.handle)
 		closeErr = windows.CloseHandle(c.handle)
 	})
 	return closeErr
@@ -265,7 +276,9 @@ func (t *NamedPipeTransport) Close() error {
 		delete(t.connections, id)
 	}
 	for id, l := range t.listeners {
-		_ = windows.CloseHandle(l.handle)
+		if l.handle != windows.InvalidHandle {
+			_ = windows.CloseHandle(l.handle)
+		}
 		delete(t.listeners, id)
 	}
 	return nil
