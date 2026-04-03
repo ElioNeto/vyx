@@ -60,7 +60,7 @@ func (m *Monitor) checkAll(ctx context.Context) {
 	}
 
 	for _, w := range workers {
-		if w.State == worker.StateStopped || w.State == worker.StateRestarting {
+		if w.State == worker.StateStopped || w.State == worker.StateRestarting || w.State == worker.StateStarting {
 			continue
 		}
 

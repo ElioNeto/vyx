@@ -69,11 +69,12 @@ func (s *Service) SpawnWorker(ctx context.Context, id, command string, args []st
 		return nil, worker.ErrSpawnFailed
 	}
 
-	w.State = worker.StateRunning
-	w.LastHeartbeat = time.Now()
+	// Keep the worker in StateStarting until the handshake completes.
+	// The handshake handler (or heartbeat loop) will call MarkRunning
+	// once the worker connects and sends its TypeHandshake frame.
 	w.UpdatedAt = time.Now()
 	_ = s.repo.Save(ctx, w)
-	s.publish(ctx, worker.EventRunning, w, "")
+	s.publish(ctx, worker.EventSpawned, w, "")
 
 	return w, nil
 }

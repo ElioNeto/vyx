@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/ElioNeto/vyx/core/domain/ipc"
 	"github.com/ElioNeto/vyx/core/infrastructure/ipc/framing"
@@ -167,10 +168,21 @@ func (t *Transport) Send(_ context.Context, workerID string, msg ipc.Message) er
 }
 
 // Receive blocks until a complete frame is read from the worker's connection.
-func (t *Transport) Receive(_ context.Context, workerID string) (ipc.Message, error) {
+// If the context carries a deadline, SetReadDeadline is applied so the read
+// returns promptly when the heartbeat interval (or any other timeout) expires.
+func (t *Transport) Receive(ctx context.Context, workerID string) (ipc.Message, error) {
 	c, err := t.getConn(workerID)
 	if err != nil {
 		return ipc.Message{}, err
+	}
+
+	// Honour the context deadline so callers (heartbeat loop, handshake
+	// handler) are not blocked indefinitely when a worker stops responding.
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := c.Conn.SetReadDeadline(deadline); err != nil {
+			return ipc.Message{}, fmt.Errorf("uds: set read deadline: %w", err)
+		}
+		defer c.Conn.SetReadDeadline(time.Time{}) // clear after read
 	}
 
 	return framing.Read(c.Conn)
