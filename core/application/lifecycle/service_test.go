@@ -72,8 +72,8 @@ func TestSpawnWorker_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if w.State != worker.StateRunning {
-		t.Errorf("expected state %s, got %s", worker.StateRunning, w.State)
+	if w.State != worker.StateStarting {
+		t.Errorf("expected state %s, got %s", worker.StateStarting, w.State)
 	}
 	if len(mgr.spawned) != 1 || mgr.spawned[0] != "node:api" {
 		t.Errorf("expected worker to be spawned, got %v", mgr.spawned)
@@ -110,6 +110,7 @@ func TestStopWorker_Success(t *testing.T) {
 	svc, _ := newTestService(mgr)
 
 	_, _ = svc.SpawnWorker(context.Background(), "node:api", "node", nil, "")
+	_ = svc.MarkRunning(context.Background(), "node:api")
 	err := svc.StopWorker(context.Background(), "node:api")
 
 	if err != nil {
@@ -148,6 +149,7 @@ func TestRestartWorker_IncrementsRestartCount(t *testing.T) {
 	svc, _ := newTestService(mgr)
 
 	_, _ = svc.SpawnWorker(context.Background(), "node:api", "node", nil, "")
+	_ = svc.MarkRunning(context.Background(), "node:api")
 	_ = svc.MarkUnhealthy(context.Background(), "node:api")
 	err := svc.RestartWorker(context.Background(), "node:api")
 

@@ -4,14 +4,16 @@ project:
 
 workers:
   - id: go:api
-    command: ./go-api.exe
+    command: go run .
+    working_dir: ./workers/go
     replicas: 1
     strategy: round-robin
-    startup_timeout: 10s
+    startup_timeout: 30s
     shutdown_timeout: 5s
 
   - id: node:api
     command: node workers/node/worker.js
+    working_dir: .
     replicas: 1
     strategy: round-robin
     startup_timeout: 10s

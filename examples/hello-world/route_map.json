@@ -3,32 +3,32 @@
     {
       "path": "/api/hello",
       "method": "GET",
-      "workerID": "go:api",
-      "authRoles": ["guest", "user"],
+      "worker_id": "go:api",
+      "auth_roles": ["guest", "user"],
       "validate": "",
       "type": "api"
     },
     {
       "path": "/api/greet",
       "method": "POST",
-      "workerID": "go:api",
-      "authRoles": ["user"],
+      "worker_id": "go:api",
+      "auth_roles": ["user"],
       "validate": "greet",
       "type": "api"
     },
     {
       "path": "/api/products",
       "method": "GET",
-      "workerID": "node:api",
-      "authRoles": ["guest", "user"],
+      "worker_id": "node:api",
+      "auth_roles": ["guest", "user"],
       "validate": "",
       "type": "api"
     },
     {
       "path": "/api/products/:id",
       "method": "GET",
-      "workerID": "node:api",
-      "authRoles": ["user"],
+      "worker_id": "node:api",
+      "auth_roles": ["user"],
       "validate": "",
       "type": "api"
     }

@@ -34,7 +34,11 @@ func (m *Manager) Spawn(ctx context.Context, w *worker.Worker) error {
 		return worker.ErrInvalidCommand
 	}
 
-	cmd := exec.CommandContext(ctx, w.Command, w.Args...)
+	// Use exec.Command (not CommandContext) so the process lifetime is NOT
+	// tied to any context deadline.  Worker processes are long-lived and are
+	// stopped explicitly via Stop/StopAll — tying them to ctx would kill
+	// them when a short-lived startup-timeout context expires.
+	cmd := exec.Command(w.Command, w.Args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	// WorkDir allows workers with their own go.mod (or any sub-module) to be

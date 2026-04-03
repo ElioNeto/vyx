@@ -24,6 +24,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	apgw "github.com/ElioNeto/vyx/core/application/gateway"
+	"github.com/ElioNeto/vyx/core/application/handshake"
 	"github.com/ElioNeto/vyx/core/application/heartbeat"
 	"github.com/ElioNeto/vyx/core/application/lifecycle"
 	"github.com/ElioNeto/vyx/core/application/monitor"
@@ -256,6 +257,11 @@ func runServer(devMode bool) {
 	if routeMapPath == "" {
 		routeMapPath = "./route_map.json"
 	}
+	// Resolve relative route_map path against the config file's directory
+	// so that `VYX_CONFIG=/abs/path/vyx.yaml` finds the route_map next to it.
+	if !filepath.IsAbs(routeMapPath) {
+		routeMapPath = filepath.Join(filepath.Dir(configPath), routeMapPath)
+	}
 	rm, err := dgw.LoadRouteMap(routeMapPath)
 	if err != nil {
 		log.Warn("route_map.json not found — starting without routes",
@@ -271,17 +277,10 @@ func runServer(devMode bool) {
 	if socketDir == "" {
 		socketDir = uds.DefaultSocketDir
 	}
-	if isWindows() {
-		transport = uds.NewNamedPipeTransport()
-		log.Info("IPC transport: Windows Named Pipes",
-			zap.String("pipe_prefix", `\\.\pipe\vyx-`),
-		)
-	} else {
-		transport = uds.New(socketDir)
-		log.Info("IPC transport: Unix Domain Sockets",
-			zap.String("socket_dir", socketDir),
-		)
-	}
+	transport = platformTransport(socketDir)
+	log.Info("IPC transport initialised",
+		zap.String("socket_dir", socketDir),
+	)
 
 	// --- Core services ---
 	repo := repository.NewMemoryWorkerRepository()
@@ -383,14 +382,28 @@ func runServer(devMode bool) {
 					filepath.Join(socketDir, workerID+".sock"))
 			}
 
-			spawnCtx := ctx
-			if wcfg.StartupTimeout > 0 {
-				var cancel context.CancelFunc
-				spawnCtx, cancel = context.WithTimeout(ctx, wcfg.StartupTimeout)
-				defer cancel()
+				spawnCtx := ctx
+				var spawnCancel context.CancelFunc
+				if wcfg.StartupTimeout > 0 {
+					spawnCtx, spawnCancel = context.WithTimeout(ctx, wcfg.StartupTimeout)
+				}
+
+			// Resolve relative working_dir against the config file's directory
+			// so that workers with their own go.mod (or any sub-module) are
+			// spawned with the correct absolute CWD regardless of where the
+			// vyx binary itself was invoked from.
+			workDir := wcfg.WorkingDir
+			if workDir != "" && !filepath.IsAbs(workDir) {
+				workDir = filepath.Join(filepath.Dir(configPath), workDir)
+				if abs, err := filepath.Abs(workDir); err == nil {
+					workDir = abs
+				}
 			}
 
-			w, err := service.SpawnWorker(spawnCtx, workerID, cmd, cmdArgs, wcfg.WorkingDir)
+			// Use the root ctx for spawning so the process lifetime is NOT
+			// tied to the startup_timeout context.  spawnCtx is only for the
+			// handshake wait below.
+			w, err := service.SpawnWorker(ctx, workerID, cmd, cmdArgs, workDir)
 			if err != nil {
 				log.Error("failed to spawn worker",
 					zap.String("worker_id", workerID),
@@ -405,7 +418,27 @@ func runServer(devMode bool) {
 				zap.Int("replica", i),
 			)
 
-			hbReceiver.StartLoop(ctx, w.ID)
+				// Wait for the worker to connect and complete the IPC handshake.
+				// The handshake handler retries until the worker dials the socket
+				// or the startup-timeout context expires.
+				hsHandler := handshake.NewHandler(transport, rm, service, log)
+				hsErr := waitForHandshake(spawnCtx, hsHandler, workerID, log)
+				// Release the startup-timeout context immediately so it does not
+				// leak for the lifetime of runServer.  Using defer inside a for
+				// loop would accumulate all cancel funcs until the function exits.
+				if spawnCancel != nil {
+					spawnCancel()
+				}
+				if hsErr != nil {
+					log.Error("worker handshake failed",
+						zap.String("worker_id", workerID),
+						zap.Error(hsErr),
+					)
+					_ = service.StopWorker(ctx, workerID)
+					continue
+				}
+
+				hbReceiver.StartLoop(ctx, w.ID)
 		}
 	}
 
@@ -488,6 +521,34 @@ func resolveCommand(cmd string) string {
 	// Fall back to the original token (e.g. "node", "python") so exec.LookPath
 	// can find it on PATH as usual.
 	return cmd
+}
+
+// waitForHandshake retries the handshake until the worker connects and sends
+// its TypeHandshake frame, or until ctx expires. This bridges the gap between
+// process spawn (which returns immediately) and the worker dialling the IPC
+// socket (which may take a few hundred milliseconds for a compiled binary or
+// several seconds for `go run`).
+func waitForHandshake(ctx context.Context, h *handshake.Handler, workerID string, log *zap.Logger) error {
+	const retryInterval = 500 * time.Millisecond
+	for {
+		err := h.Handle(ctx, workerID)
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return fmt.Errorf("handshake timeout for worker %s: %w", workerID, ctx.Err())
+		}
+		// Worker hasn't connected yet — retry after a short sleep.
+		log.Debug("waiting for worker to connect for handshake",
+			zap.String("worker_id", workerID),
+			zap.Error(err),
+		)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("handshake timeout for worker %s: %w", workerID, ctx.Err())
+		case <-time.After(retryInterval):
+		}
+	}
 }
 
 func fatalf(format string, args ...any) {

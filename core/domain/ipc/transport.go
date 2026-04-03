@@ -10,9 +10,16 @@ type Transport interface {
 	// Send serialises msg and writes it to the worker identified by workerID.
 	Send(ctx context.Context, workerID string, msg Message) error
 
-	// Receive blocks until a message arrives from the worker identified by
-	// workerID, or until ctx is cancelled.
+	// Receive blocks until a heartbeat or handshake message arrives from the
+	// worker identified by workerID, or until ctx is cancelled.
+	// Used by the heartbeat loop and handshake handler.
 	Receive(ctx context.Context, workerID string) (Message, error)
+
+	// ReceiveResponse blocks until a response or error message arrives from
+	// the worker identified by workerID, or until ctx is cancelled.
+	// Used by the gateway dispatcher to read worker responses without
+	// competing with the heartbeat loop for reads on the same connection.
+	ReceiveResponse(ctx context.Context, workerID string) (Message, error)
 
 	// Register opens (or accepts) the UDS socket for the given worker.
 	Register(ctx context.Context, workerID string) error

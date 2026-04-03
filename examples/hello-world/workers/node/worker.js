@@ -166,5 +166,8 @@ socket.on('data', (data) => {
 socket.on('error', (err) => console.error('[node:api] socket error:', err.message));
 socket.on('close', () => { console.log('[node:api] disconnected'); process.exit(0); });
 
-process.on('SIGTERM', () => { socket.destroy(); process.exit(0); });
-process.on('SIGINT',  () => { socket.destroy(); process.exit(0); });
+// Mantém o event loop vivo para que o socket não seja coletado
+const keepAlive = setInterval(() => {}, 30_000);
+
+process.on('SIGTERM', () => { clearInterval(keepAlive); socket.destroy(); process.exit(0); });
+process.on('SIGINT',  () => { clearInterval(keepAlive); socket.destroy(); process.exit(0); });
