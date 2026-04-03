@@ -257,6 +257,11 @@ func runServer(devMode bool) {
 	if routeMapPath == "" {
 		routeMapPath = "./route_map.json"
 	}
+	// Resolve relative route_map path against the config file's directory
+	// so that `VYX_CONFIG=/abs/path/vyx.yaml` finds the route_map next to it.
+	if !filepath.IsAbs(routeMapPath) {
+		routeMapPath = filepath.Join(filepath.Dir(configPath), routeMapPath)
+	}
 	rm, err := dgw.LoadRouteMap(routeMapPath)
 	if err != nil {
 		log.Warn("route_map.json not found — starting without routes",

@@ -13,6 +13,7 @@ workers:
 
   - id: node:api
     command: node workers/node/worker.js
+    working_dir: .
     replicas: 1
     strategy: round-robin
     startup_timeout: 10s
