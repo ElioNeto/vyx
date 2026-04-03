@@ -38,6 +38,9 @@ func (r *recordingTransport) Send(_ context.Context, workerID string, msg ipc.Me
 func (r *recordingTransport) Receive(_ context.Context, _ string) (ipc.Message, error) {
 	return ipc.Message{}, nil
 }
+func (r *recordingTransport) ReceiveResponse(_ context.Context, _ string) (ipc.Message, error) {
+	return ipc.Message{}, nil
+}
 func (r *recordingTransport) Register(_ context.Context, _ string) error   { return nil }
 func (r *recordingTransport) Deregister(_ context.Context, _ string) error { return nil }
 func (r *recordingTransport) Close() error                                  { return nil }
@@ -141,6 +144,9 @@ func (f *failingSendTransport) Send(_ context.Context, _ string, _ ipc.Message) 
 	return &mockSendError{}
 }
 func (f *failingSendTransport) Receive(_ context.Context, _ string) (ipc.Message, error) {
+	return ipc.Message{}, nil
+}
+func (f *failingSendTransport) ReceiveResponse(_ context.Context, _ string) (ipc.Message, error) {
 	return ipc.Message{}, nil
 }
 func (f *failingSendTransport) Register(_ context.Context, _ string) error   { return nil }

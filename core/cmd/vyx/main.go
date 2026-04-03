@@ -382,12 +382,11 @@ func runServer(devMode bool) {
 					filepath.Join(socketDir, workerID+".sock"))
 			}
 
-			spawnCtx := ctx
-			if wcfg.StartupTimeout > 0 {
-				var cancel context.CancelFunc
-				spawnCtx, cancel = context.WithTimeout(ctx, wcfg.StartupTimeout)
-				defer cancel()
-			}
+				spawnCtx := ctx
+				var spawnCancel context.CancelFunc
+				if wcfg.StartupTimeout > 0 {
+					spawnCtx, spawnCancel = context.WithTimeout(ctx, wcfg.StartupTimeout)
+				}
 
 			// Resolve relative working_dir against the config file's directory
 			// so that workers with their own go.mod (or any sub-module) are
@@ -419,20 +418,27 @@ func runServer(devMode bool) {
 				zap.Int("replica", i),
 			)
 
-			// Wait for the worker to connect and complete the IPC handshake.
-			// The handshake handler retries until the worker dials the socket
-			// or the startup-timeout context expires.
-			hsHandler := handshake.NewHandler(transport, rm, service, log)
-			if err := waitForHandshake(spawnCtx, hsHandler, workerID, log); err != nil {
-				log.Error("worker handshake failed",
-					zap.String("worker_id", workerID),
-					zap.Error(err),
-				)
-				_ = service.StopWorker(ctx, workerID)
-				continue
-			}
+				// Wait for the worker to connect and complete the IPC handshake.
+				// The handshake handler retries until the worker dials the socket
+				// or the startup-timeout context expires.
+				hsHandler := handshake.NewHandler(transport, rm, service, log)
+				hsErr := waitForHandshake(spawnCtx, hsHandler, workerID, log)
+				// Release the startup-timeout context immediately so it does not
+				// leak for the lifetime of runServer.  Using defer inside a for
+				// loop would accumulate all cancel funcs until the function exits.
+				if spawnCancel != nil {
+					spawnCancel()
+				}
+				if hsErr != nil {
+					log.Error("worker handshake failed",
+						zap.String("worker_id", workerID),
+						zap.Error(hsErr),
+					)
+					_ = service.StopWorker(ctx, workerID)
+					continue
+				}
 
-			hbReceiver.StartLoop(ctx, w.ID)
+				hbReceiver.StartLoop(ctx, w.ID)
 		}
 	}
 

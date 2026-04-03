@@ -40,6 +40,9 @@ func (m *mockTransport) Receive(_ context.Context, _ string) (ipc.Message, error
 }
 
 func (m *mockTransport) Send(_ context.Context, _ string, _ ipc.Message) error { return nil }
+func (m *mockTransport) ReceiveResponse(_ context.Context, _ string) (ipc.Message, error) {
+	return ipc.Message{}, nil
+}
 func (m *mockTransport) Register(_ context.Context, _ string) error             { return nil }
 func (m *mockTransport) Deregister(_ context.Context, _ string) error           { return nil }
 func (m *mockTransport) Close() error                                           { return nil }

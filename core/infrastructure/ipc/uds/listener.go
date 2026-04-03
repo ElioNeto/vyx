@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 
 	"github.com/ElioNeto/vyx/core/domain/ipc"
 	"github.com/ElioNeto/vyx/core/infrastructure/ipc/framing"
@@ -21,12 +20,81 @@ const (
 	DefaultSocketDir = "/tmp/vyx"
 	// socketPerm restricts socket access to the owner process only (0600).
 	socketPerm = 0600
+
+	// demuxChanSize is the buffer depth for typed message channels.
+	// A small buffer prevents the read pump from blocking on a slow consumer.
+	demuxChanSize = 16
 )
 
-// conn holds the active network connection for one worker.
+// conn holds the active network connection for one worker plus a read pump
+// that demultiplexes incoming frames by message type.
+//
+// The read pump runs in a dedicated goroutine and fans out messages to typed
+// channels so that the heartbeat loop and the gateway dispatcher never race on
+// the same read call.
 type conn struct {
 	net.Conn
-	mu sync.Mutex // serialises concurrent writes to the same connection
+	writeMu sync.Mutex // serialises concurrent writes to the same connection
+
+	// Channels fed by the read pump — one per logical consumer.
+	heartbeatCh chan ipc.Message // TypeHeartbeat + TypeHandshake
+	responseCh  chan ipc.Message // TypeResponse + TypeError
+
+	// pumpErr is set once by the read pump when the underlying connection
+	// returns a non-nil error (typically io.EOF).  Subsequent Receive calls
+	// return this cached error so callers learn about disconnection even
+	// when the channel is drained.
+	pumpMu  sync.Mutex
+	pumpErr error
+}
+
+// startPump launches the background goroutine that reads frames from the
+// underlying net.Conn and dispatches them to the appropriate typed channel.
+// It must be called exactly once per conn.
+func (c *conn) startPump() {
+	go func() {
+		for {
+			msg, err := framing.Read(c.Conn)
+			if err != nil {
+				c.pumpMu.Lock()
+				c.pumpErr = err
+				c.pumpMu.Unlock()
+				// Close channels so blocked receivers unblock with zero-value.
+				close(c.heartbeatCh)
+				close(c.responseCh)
+				return
+			}
+
+			switch msg.Type {
+			case ipc.TypeHeartbeat, ipc.TypeHandshake:
+				select {
+				case c.heartbeatCh <- msg:
+				default:
+					// Drop if consumer is too slow — heartbeat will be
+					// counted as missed, which is the correct behaviour.
+				}
+				case ipc.TypeResponse, ipc.TypeError,
+					ipc.TypeWSOpen, ipc.TypeWSMessage, ipc.TypeWSClose:
+					select {
+					case c.responseCh <- msg:
+					default:
+					}
+				default:
+				// Unknown type — route to response channel as a catch-all.
+				select {
+				case c.responseCh <- msg:
+				default:
+				}
+			}
+		}
+	}()
+}
+
+// getPumpErr returns the cached read-pump error (if any).
+func (c *conn) getPumpErr() error {
+	c.pumpMu.Lock()
+	defer c.pumpMu.Unlock()
+	return c.pumpErr
 }
 
 // Transport is the UDS-backed implementation of domain/ipc.Transport.
@@ -89,7 +157,8 @@ func (t *Transport) Register(ctx context.Context, workerID string) error {
 	return nil
 }
 
-// accept blocks until the worker connects, then stores the connection.
+// accept blocks until the worker connects, then stores the connection and
+// starts the read pump.
 func (t *Transport) accept(ctx context.Context, workerID string, ln net.Listener) {
 	type result struct {
 		conn net.Conn
@@ -110,8 +179,14 @@ func (t *Transport) accept(ctx context.Context, workerID string, ln net.Listener
 		if r.err != nil {
 			return
 		}
+		c := &conn{
+			Conn:        r.conn,
+			heartbeatCh: make(chan ipc.Message, demuxChanSize),
+			responseCh:  make(chan ipc.Message, demuxChanSize),
+		}
+		c.startPump()
 		t.mu.Lock()
-		t.connections[workerID] = &conn{Conn: r.conn}
+		t.connections[workerID] = c
 		t.mu.Unlock()
 	}
 }
@@ -161,31 +236,59 @@ func (t *Transport) Send(_ context.Context, workerID string, msg ipc.Message) er
 		return err
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 
 	return framing.Write(c.Conn, msg)
 }
 
-// Receive blocks until a complete frame is read from the worker's connection.
-// If the context carries a deadline, SetReadDeadline is applied so the read
-// returns promptly when the heartbeat interval (or any other timeout) expires.
+// Receive reads the next heartbeat/handshake message from the worker.
+//
+// The background read pump demultiplexes incoming frames by type:
+//   - TypeHeartbeat and TypeHandshake are routed here.
+//   - TypeResponse and TypeError are routed to ReceiveResponse.
+//
+// This method is used by the heartbeat loop and the handshake handler.
 func (t *Transport) Receive(ctx context.Context, workerID string) (ipc.Message, error) {
 	c, err := t.getConn(workerID)
 	if err != nil {
 		return ipc.Message{}, err
 	}
 
-	// Honour the context deadline so callers (heartbeat loop, handshake
-	// handler) are not blocked indefinitely when a worker stops responding.
-	if deadline, ok := ctx.Deadline(); ok {
-		if err := c.Conn.SetReadDeadline(deadline); err != nil {
-			return ipc.Message{}, fmt.Errorf("uds: set read deadline: %w", err)
-		}
-		defer c.Conn.SetReadDeadline(time.Time{}) // clear after read
+	return t.receiveFrom(ctx, workerID, c.heartbeatCh, c)
+}
+
+// ReceiveResponse reads the next response/error message from the worker.
+//
+// The background read pump demultiplexes incoming frames by type:
+//   - TypeResponse and TypeError are routed here.
+//   - TypeHeartbeat and TypeHandshake are routed to Receive.
+//
+// This method is used by the gateway dispatcher.
+func (t *Transport) ReceiveResponse(ctx context.Context, workerID string) (ipc.Message, error) {
+	c, err := t.getConn(workerID)
+	if err != nil {
+		return ipc.Message{}, err
 	}
 
-	return framing.Read(c.Conn)
+	return t.receiveFrom(ctx, workerID, c.responseCh, c)
+}
+
+// receiveFrom is the shared implementation for Receive and ReceiveResponse.
+func (t *Transport) receiveFrom(ctx context.Context, workerID string, ch <-chan ipc.Message, c *conn) (ipc.Message, error) {
+	select {
+	case <-ctx.Done():
+		return ipc.Message{}, ctx.Err()
+	case msg, ok := <-ch:
+		if !ok {
+			// Channel closed by read pump — return the pump error.
+			if pErr := c.getPumpErr(); pErr != nil {
+				return ipc.Message{}, fmt.Errorf("framing: read header: %w", pErr)
+			}
+			return ipc.Message{}, fmt.Errorf("%w: %s", ipc.ErrWorkerNotConnected, workerID)
+		}
+		return msg, nil
+	}
 }
 
 func (t *Transport) getConn(workerID string) (*conn, error) {

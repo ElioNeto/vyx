@@ -166,8 +166,9 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 		return nil, fmt.Errorf("gateway: send to worker %s: %w", route.WorkerID, err)
 	}
 
-	// 6. Wait for the worker response.
-	respMsg, err := d.transport.Receive(dispatchCtx, route.WorkerID)
+	// 6. Wait for the worker response (via the demuxed response channel so
+	// heartbeat frames are not consumed here).
+	respMsg, err := d.transport.ReceiveResponse(dispatchCtx, route.WorkerID)
 	if err != nil {
 		if dispatchCtx.Err() != nil {
 			statusCode = 504

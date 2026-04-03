@@ -50,6 +50,9 @@ func (f *fakeTransport) Receive(ctx context.Context, workerID string) (ipc.Messa
 	}
 }
 
+func (f *fakeTransport) ReceiveResponse(ctx context.Context, workerID string) (ipc.Message, error) {
+	return f.Receive(ctx, workerID)
+}
 func (f *fakeTransport) Register(_ context.Context, _ string) error  { return nil }
 func (f *fakeTransport) Deregister(_ context.Context, _ string) error { return nil }
 func (f *fakeTransport) Close() error                                  { return nil }

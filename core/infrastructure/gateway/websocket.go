@@ -182,7 +182,7 @@ func (p *wsProxy) proxy(
 	// 6. Pump worker → client.
 	go func() {
 		for {
-			msg, err := p.transport.Receive(ctx, workerID)
+			msg, err := p.transport.ReceiveResponse(ctx, workerID)
 			if err != nil {
 				errCh <- err
 				return
