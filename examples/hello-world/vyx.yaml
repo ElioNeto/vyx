@@ -4,8 +4,8 @@ project:
 
 workers:
   - id: go:api
-    command: go run ./workers/go/
-    working_dir: .
+    command: go run .
+    working_dir: ./workers/go
     replicas: 1
     strategy: round-robin
     startup_timeout: 30s

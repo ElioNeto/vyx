@@ -384,7 +384,19 @@ func runServer(devMode bool) {
 				defer cancel()
 			}
 
-			w, err := service.SpawnWorker(spawnCtx, workerID, cmd, cmdArgs, wcfg.WorkingDir)
+			// Resolve relative working_dir against the config file's directory
+			// so that workers with their own go.mod (or any sub-module) are
+			// spawned with the correct absolute CWD regardless of where the
+			// vyx binary itself was invoked from.
+			workDir := wcfg.WorkingDir
+			if workDir != "" && !filepath.IsAbs(workDir) {
+				workDir = filepath.Join(filepath.Dir(configPath), workDir)
+				if abs, err := filepath.Abs(workDir); err == nil {
+					workDir = abs
+				}
+			}
+
+			w, err := service.SpawnWorker(spawnCtx, workerID, cmd, cmdArgs, workDir)
 			if err != nil {
 				log.Error("failed to spawn worker",
 					zap.String("worker_id", workerID),
