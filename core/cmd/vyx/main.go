@@ -401,7 +401,10 @@ func runServer(devMode bool) {
 				}
 			}
 
-			w, err := service.SpawnWorker(spawnCtx, workerID, cmd, cmdArgs, workDir)
+			// Use the root ctx for spawning so the process lifetime is NOT
+			// tied to the startup_timeout context.  spawnCtx is only for the
+			// handshake wait below.
+			w, err := service.SpawnWorker(ctx, workerID, cmd, cmdArgs, workDir)
 			if err != nil {
 				log.Error("failed to spawn worker",
 					zap.String("worker_id", workerID),
