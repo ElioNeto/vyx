@@ -157,3 +157,113 @@ func TestDispatcher_WorkerError_Returns502(t *testing.T) {
 		t.Errorf("expected 502 for worker error, got %d", resp.StatusCode)
 	}
 }
+
+// --- ProxyListener hook tests ---
+
+type hookRecorder struct {
+	routeMatched bool
+	preDispatch  bool
+	postDispatch bool
+	onError      bool
+	errorPhase   apgw.Phase
+	correlationID string
+	route        *dgw.RouteEntry
+}
+
+func (r *hookRecorder) OnRouteMatch(lc *apgw.LifecycleContext) {
+	r.routeMatched = true
+	r.correlationID = lc.CorrelationID
+	r.route = lc.Route
+}
+func (r *hookRecorder) OnPreDispatch(lc *apgw.LifecycleContext) {
+	r.preDispatch = true
+}
+func (r *hookRecorder) OnPostDispatch(lc *apgw.LifecycleContext, _ time.Duration) {
+	r.postDispatch = true
+}
+func (r *hookRecorder) OnError(lc *apgw.LifecycleContext, phase apgw.Phase) {
+	r.onError = true
+	r.errorPhase = phase
+}
+
+func TestDispatcher_Hooks_FullPipeline(t *testing.T) {
+	routes := dgw.NewRouteMap([]dgw.RouteEntry{
+		{Method: "GET", Path: "/ping", WorkerID: "go:api"},
+	})
+	transport := &mockTransport{respMsg: ipc.Message{Type: ipc.TypeResponse, Payload: []byte(`{"ok":true}`)}}
+	rec := &hookRecorder{}
+	d := apgw.NewDispatcher(routes, transport, &mockJWT{}, &mockSchema{}, 5*time.Second, zap.NewNop(),
+		apgw.WithProxyListeners(rec))
+
+	_, err := d.Dispatch(context.Background(), &dgw.GatewayRequest{
+		Method: "GET", Path: "/ping",
+		Headers: map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !rec.routeMatched {
+		t.Error("OnRouteMatch not called")
+	}
+	if !rec.preDispatch {
+		t.Error("OnPreDispatch not called")
+	}
+	if !rec.postDispatch {
+		t.Error("OnPostDispatch not called")
+	}
+	if rec.onError {
+		t.Error("OnError should not be called on success")
+	}
+	if rec.correlationID == "" {
+		t.Error("correlation ID should be non-empty")
+	}
+	if rec.route == nil || rec.route.Path != "/ping" {
+		t.Errorf("route = %v, want /ping", rec.route)
+	}
+}
+
+func TestDispatcher_Hooks_OnError(t *testing.T) {
+	routes := dgw.NewRouteMap(nil)
+	rec := &hookRecorder{}
+	d := apgw.NewDispatcher(routes, &mockTransport{}, &mockJWT{}, &mockSchema{}, 5*time.Second, zap.NewNop(),
+		apgw.WithProxyListeners(rec))
+
+	_, _ = d.Dispatch(context.Background(), &dgw.GatewayRequest{
+		Method: "GET", Path: "/unknown",
+		Headers: map[string]string{},
+	})
+	if !rec.onError {
+		t.Error("OnError should be called on 404")
+	}
+}
+
+func TestDispatcher_Hooks_EarlyReturn(t *testing.T) {
+	routes := dgw.NewRouteMap([]dgw.RouteEntry{
+		{Method: "GET", Path: "/ping", WorkerID: "go:api"},
+	})
+
+	blocker := apgw.FuncListener{
+		OnRouteMatchFn: func(lc *apgw.LifecycleContext) {
+			lc.RespondBeforeDispatch(&dgw.GatewayResponse{
+				StatusCode: 503, Body: []byte("maintenance"),
+			})
+		},
+	}
+
+	d := apgw.NewDispatcher(routes, &mockTransport{}, &mockJWT{}, &mockSchema{}, 5*time.Second, zap.NewNop(),
+		apgw.WithProxyListeners(blocker))
+
+	resp, err := d.Dispatch(context.Background(), &dgw.GatewayRequest{
+		Method: "GET", Path: "/ping",
+		Headers: map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 503 {
+		t.Errorf("status = %d, want 503", resp.StatusCode)
+	}
+	if string(resp.Body) != "maintenance" {
+		t.Errorf("body = %q, want %q", string(resp.Body), "maintenance")
+	}
+}

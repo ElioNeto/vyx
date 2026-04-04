@@ -22,7 +22,7 @@ See all issues at [github.com/ElioNeto/vyx/issues](https://github.com/ElioNeto/v
 
 | Order | Issue | Title | Area | Depends on | Complexity |
 |------:|-------|-------|------|------------|------------|
-| 1 | [#55](https://github.com/ElioNeto/vyx/issues/55) | Request Lifecycle Hooks (Middleware / ProxyListener API) | Core | — | M |
+| 1 | [#55](https://github.com/ElioNeto/vyx/issues/55) | Request Lifecycle Hooks (Middleware / ProxyListener API) | Core | — | M | ✅ done |
 | 2 | [#52](https://github.com/ElioNeto/vyx/issues/52) | End-to-End Request Tracing (Correlation IDs) | Observability | #55 | M |
 | 3 | [#57](https://github.com/ElioNeto/vyx/issues/57) | Pluggable Client IP Resolver (X-Forwarded-For) | Core | #55 | S |
 | 4 | [#56](https://github.com/ElioNeto/vyx/issues/56) | Graceful Worker Drain on Shutdown and Hot Reload | Core | #55 | M |
