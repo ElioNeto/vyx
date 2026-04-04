@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"gopkg.in/yaml.v3"
 
 	apgw "github.com/ElioNeto/vyx/core/application/gateway"
@@ -31,32 +32,50 @@ import (
 	doamincfg "github.com/ElioNeto/vyx/core/domain/config"
 	dgw "github.com/ElioNeto/vyx/core/domain/gateway"
 	"github.com/ElioNeto/vyx/core/domain/ipc"
+	dlog "github.com/ElioNeto/vyx/core/domain/log"
 	infracfg "github.com/ElioNeto/vyx/core/infrastructure/config"
 	infragw "github.com/ElioNeto/vyx/core/infrastructure/gateway"
+	ilog "github.com/ElioNeto/vyx/core/infrastructure/log"
 	"github.com/ElioNeto/vyx/core/infrastructure/ipc/uds"
 	"github.com/ElioNeto/vyx/core/infrastructure/logger"
 	"github.com/ElioNeto/vyx/core/infrastructure/process"
 	"github.com/ElioNeto/vyx/core/infrastructure/repository"
+	"github.com/ElioNeto/vyx/core/cmd/tui"
 )
 
 const defaultConfigPath = "vyx.yaml"
 
 func main() {
 	if len(os.Args) < 2 {
-		runServer(false)
+		runServer(false, false)
 		return
 	}
 
-	switch os.Args[1] {
+	subcmd := os.Args[1]
+
+	// Check for --tui flag on dev
+	withTUI := false
+	switch subcmd {
+	case "dev":
+		for _, a := range os.Args[2:] {
+			if a == "--tui" {
+				withTUI = true
+			}
+		}
+	}
+
+	switch subcmd {
 	case "new":
 		if len(os.Args) < 3 {
 			fatalf("usage: vyx new <project-name>")
 		}
 		cmdNew(os.Args[2])
 	case "dev":
-		runServer(true)
+		runServer(true, withTUI)
+	case "logs":
+		cmdLogs()
 	case "start":
-		runServer(false)
+		runServer(false, false)
 	case "build":
 		cmdBuild()
 	case "annotate":
@@ -75,7 +94,9 @@ func printUsage() {
 
 Usage:
   vyx new <name>    Scaffold a new vyx project
-  vyx dev           Start core in development mode (h2c, verbose logs, hot reload)
+  vyx dev           Start core in development mode (h2c, verbose logs)
+  vyx dev --tui     Start core with interactive log viewer
+  vyx logs          Launch the log viewer (TUI) for a running core
   vyx start         Start core in production mode
   vyx build         Scan annotations and generate route_map.json
   vyx annotate      Dry-run: print discovered routes to stdout
@@ -215,22 +236,86 @@ func runAnnotateCmd(goDir, tsDir, output string) error {
 	return nil
 }
 
+// ─── vyx logs ───────────────────────────────────────────────────────────────────
+
+func cmdLogs() {
+	fmt.Println("vyx logs: launching log viewer (standalone mode requires a running core)")
+	fmt.Println("Tip: use 'vyx dev --tui' to start core with the log viewer")
+}
+
 // ─── vyx dev / vyx start ──────────────────────────────────────────────────────────────────
 
-func runServer(devMode bool) {
-	var log *zap.Logger
+// newLogger creates a zap.Logger. If mux is non-nil, a copy of entries is also
+// pushed to the multiplexer for TUI display.
+func newLogger(devMode bool, mux *ilog.Multiplexer) (*zap.Logger, error) {
+	pe := zap.NewProductionEncoderConfig()
+	pe.TimeKey = "timestamp"
+	pe.EncodeTime = zapcore.ISO8601TimeEncoder
+	pe.MessageKey = "message"
+	pe.LevelKey = "level"
+
+	var base zapcore.Encoder
+	var level zapcore.Level
 	if devMode {
-		var err error
-		log, err = zap.NewDevelopment()
-		if err != nil {
-			fatalf("logger: %v", err)
+		ce := zap.NewDevelopmentEncoderConfig()
+		ce.EncodeTime = zapcore.ISO8601TimeEncoder
+		base = zapcore.NewConsoleEncoder(ce)
+		level = zap.DebugLevel
+	} else {
+		base = zapcore.NewJSONEncoder(pe)
+		level = zap.InfoLevel
+	}
+
+	// Core writes to stderr by default.
+	ws := zapcore.Lock(os.Stderr)
+	core := zapcore.NewCore(base, ws, level)
+
+	// If a multiplexer is provided, also push every log entry into it.
+	if mux != nil {
+		tuiEncoder := zapcore.NewJSONEncoder(pe)
+		tuiCore := zapcore.NewCore(tuiEncoder, muxWriteSyncer{mux: mux}, zap.DebugLevel)
+		core = zapcore.NewTee(core, tuiCore)
+	}
+
+	return zap.New(core), nil
+}
+
+// muxWriteSyncer is a zapcore.WriteSyncer that decodes JSON and pushes to the
+// multiplexer as a structured Entry.
+type muxWriteSyncer struct {
+	mux *ilog.Multiplexer
+}
+
+func (w muxWriteSyncer) Write(p []byte) (int, error) {
+	var entry dlog.Entry
+	if err := json.Unmarshal(p, &entry); err != nil {
+		// Fallback: push raw text
+		entry = dlog.Entry{
+			Timestamp: time.Now(),
+			Source:    "CORE",
+			Level:     "INFO",
+			Raw:       string(p),
 		}
 	} else {
-		var err error
-		log, err = zap.NewProduction()
-		if err != nil {
-			fatalf("logger: %v", err)
+		if entry.Source == "" {
+			entry.Source = "CORE"
 		}
+	}
+	w.mux.Push(entry)
+	return len(p), nil
+}
+
+func (w muxWriteSyncer) Sync() error { return nil }
+
+func runServer(devMode bool, withTUI bool) {
+	var mux *ilog.Multiplexer
+	if withTUI {
+		mux = ilog.New()
+	}
+
+	log, err := newLogger(devMode, mux)
+	if err != nil {
+		fatalf("logger: %v", err)
 	}
 	defer log.Sync()
 
@@ -284,7 +369,13 @@ func runServer(devMode bool) {
 
 	// --- Core services ---
 	repo := repository.NewMemoryWorkerRepository()
-	manager := process.New()
+
+	// Wire manager to capture worker output when TUI is enabled.
+	var managerOpts []process.Option
+	if mux != nil {
+		managerOpts = append(managerOpts, process.WithLogWriter(muxLogWriter(mux)))
+	}
+	manager := process.New(managerOpts...)
 	publisher := logger.New(log)
 
 	// hbReceiver is created before lifecycle.Service so it can be passed in.
@@ -350,6 +441,15 @@ func runServer(devMode bool) {
 		log.Info("vyx core starting",
 			zap.String("addr", gwCfg.Addr),
 		)
+	}
+
+	// --- Start TUI in a separate goroutine when requested ---
+	if mux != nil {
+		go func() {
+			if err := tui.Run(mux); err != nil {
+				log.Error("TUI exited", zap.Error(err))
+			}
+		}()
 	}
 
 	// --- Auto-spawn workers from vyx.yaml ---
@@ -554,4 +654,16 @@ func waitForHandshake(ctx context.Context, h *handshake.Handler, workerID string
 func fatalf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "vyx: "+format+"\n", args...)
 	os.Exit(1)
+}
+
+// muxLogWriter returns a process.LogWriter that pushes lines into the
+// multiplexer for TUI display.
+func muxLogWriter(mux *ilog.Multiplexer) process.LogWriter {
+	return func(workerID string, line string) {
+		entry := dlog.ParseEntry(workerID, line)
+		if entry.Source == "" {
+			entry.Source = workerID
+		}
+		mux.Push(entry)
+	}
 }

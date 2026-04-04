@@ -5,6 +5,7 @@ package process
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"sync"
@@ -15,16 +16,35 @@ import (
 
 const defaultShutdownTimeout = 5 * time.Second
 
+// LogWriter is the callback invoked for each line of stdout/stderr from a worker.
+type LogWriter func(workerID string, line string)
+
 // Manager spawns and manages OS child processes for each worker.
 type Manager struct {
 	mu        sync.RWMutex
 	processes map[string]*exec.Cmd
+	logWriter LogWriter
 }
 
-// New creates an empty process Manager.
-func New() *Manager {
-	return &Manager{
+// New creates an empty process Manager. An optional LogWriter can be provided
+// to capture worker stdout/stderr (used by the TUI log viewer).
+func New(opts ...Option) *Manager {
+	m := &Manager{
 		processes: make(map[string]*exec.Cmd),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// Option configures a Manager.
+type Option func(*Manager)
+
+// WithLogWriter sets a callback for capturing worker output.
+func WithLogWriter(w LogWriter) Option {
+	return func(m *Manager) {
+		m.logWriter = w
 	}
 }
 
@@ -34,20 +54,33 @@ func (m *Manager) Spawn(ctx context.Context, w *worker.Worker) error {
 		return worker.ErrInvalidCommand
 	}
 
-	// Use exec.Command (not CommandContext) so the process lifetime is NOT
-	// tied to any context deadline.  Worker processes are long-lived and are
-	// stopped explicitly via Stop/StopAll — tying them to ctx would kill
-	// them when a short-lived startup-timeout context expires.
 	cmd := exec.Command(w.Command, w.Args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	// WorkDir allows workers with their own go.mod (or any sub-module) to be
-	// spawned with the correct working directory so tools like `go run` can
-	// locate the module root without walking up to the repo root.
+
+	if m.logWriter != nil {
+		// Capture stdout/stderr through pipes so lines can be multiplexed
+		// into the TUI while still preserving the data in the ring buffer.
+		outReader, outWriter := io.Pipe()
+		errReader, errWriter := io.Pipe()
+		cmd.Stdout = outWriter
+		cmd.Stderr = errWriter
+
+		// Fan-out: tee the output to the log writer AND stderr (so it's still
+		// visible when not running the TUI).
+		workerID := w.ID
+		go m.pipeLog(m.logWriter, workerID, outReader)
+		go m.pipeLog(m.logWriter, workerID, errReader)
+
+		outWriter.Close()  // writer side — cmd will take over
+		errWriter.Close()
+	} else {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
+
 	if w.WorkDir != "" {
 		cmd.Dir = w.WorkDir
 	}
-	setProcAttr(cmd) // platform-specific: Setpgid on Unix, CREATE_NEW_PROCESS_GROUP on Windows
+	setProcAttr(cmd)
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("%w: %s", worker.ErrSpawnFailed, err.Error())
@@ -57,12 +90,42 @@ func (m *Manager) Spawn(ctx context.Context, w *worker.Worker) error {
 	m.processes[w.ID] = cmd
 	m.mu.Unlock()
 
-	// Watch for unexpected process exit in the background.
 	go func() {
 		_ = cmd.Wait()
 	}()
 
 	return nil
+}
+
+// pipeLog reads from a pipe and calls the logWriter for each non-empty line.
+func (m *Manager) pipeLog(writer LogWriter, workerID string, r io.Reader) {
+	buf := make([]byte, 0, 64*1024)
+	lineStart := 0
+	for {
+		n, err := r.Read(buf[lineStart:cap(buf)])
+		if n > 0 {
+			buf = buf[:lineStart+n]
+			for i, b := range buf {
+				if b == '\n' {
+					line := string(buf[:i])
+					buf = buf[i+1:]
+					if line != "" {
+						writer(workerID, line)
+					}
+				}
+			}
+			lineStart = 0
+		}
+		if err != nil {
+			if len(buf) > 0 {
+				line := string(buf)
+				if line != "" {
+					writer(workerID, line)
+				}
+			}
+			return
+		}
+	}
 }
 
 // Stop sends a termination signal to the worker process and waits for it to exit.
