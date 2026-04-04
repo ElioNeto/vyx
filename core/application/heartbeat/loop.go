@@ -31,9 +31,13 @@ type LifecycleService interface {
 
 // Config holds tuning parameters for the heartbeat loop.
 type Config struct {
-	// Interval is how often the loop checks for a missed heartbeat.
-	// Workers are expected to send a heartbeat at least once per Interval.
+	// Interval is how often the sender pings workers.
 	Interval time.Duration
+	// ReadTimeout is the deadline the loop gives each Receive call.
+	// It must be larger than Interval so the full round-trip
+	// (sender sends ping → worker echoes back) fits inside the window.
+	// When zero, defaults to Interval * 2.
+	ReadTimeout time.Duration
 	// MissedThreshold is the number of consecutive missed heartbeats before
 	// a worker is marked unhealthy. Default: 2 (i.e., 10s with 5s interval).
 	MissedThreshold int
@@ -51,6 +55,7 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		Interval:        5 * time.Second,
+		ReadTimeout:     10 * time.Second, // 2× Interval — room for sender→worker round-trip
 		MissedThreshold: 2,
 		ConnectGrace:    30 * time.Second,
 		RetryInterval:   500 * time.Millisecond,
@@ -121,7 +126,13 @@ func (l *Loop) Run(ctx context.Context) {
 		}
 
 		// Create a child context with the heartbeat read deadline.
-		readCtx, cancel := context.WithTimeout(ctx, l.cfg.Interval)
+		// Use ReadTimeout (> Interval) so the sender→worker→loop round-trip
+		// completes before the deadline fires.
+		readTimeout := l.cfg.ReadTimeout
+		if readTimeout == 0 {
+			readTimeout = l.cfg.Interval * 2
+		}
+		readCtx, cancel := context.WithTimeout(ctx, readTimeout)
 		msg, err := l.transport.Receive(readCtx, l.workerID)
 		cancel()
 
