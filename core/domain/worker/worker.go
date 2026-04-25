@@ -20,15 +20,17 @@ const (
 
 // Worker is the domain entity representing a managed worker process.
 type Worker struct {
-	ID             string
-	Command        string
-	Args           []string
-	WorkDir        string    // optional: directory to run the command in
-	State          State
-	RestartCount   int
-	LastHeartbeat  time.Time
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID              string
+	Command         string
+	Args            []string
+	WorkDir         string        // optional: directory to run the command in
+	State           State
+	RestartCount    int
+	LastHeartbeat   time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	ShutdownTimeout time.Duration // max time to wait for in-flight requests during drain
+	ShutdownTimeout time.Duration // max time to wait for in-flight requests during drain
 }
 
 // IsAlive returns true when the worker is in a healthy operational state.
