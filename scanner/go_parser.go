@@ -39,7 +39,7 @@ func parseGoFile(path, workerID string) ([]Route, []AnnotationError) {
 	if err != nil {
 		return nil, []AnnotationError{{File: path, Line: 0, Message: fmt.Sprintf("cannot open file: %v", err)}}
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var routes []Route
 	var errs []AnnotationError

@@ -50,7 +50,7 @@ func parseTSXFile(path, workerID string) ([]Route, []AnnotationError) {
 	if err != nil {
 		return nil, nil
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	scanner := bufio.NewScanner(f)
 	lineNum := 0
