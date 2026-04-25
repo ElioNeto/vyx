@@ -1,5 +1,7 @@
 package scanner
 
+import "fmt"
+
 // Route represents a discovered route from annotation parsing.
 type Route struct {
 	Path      string   `json:"path"`

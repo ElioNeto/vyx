@@ -107,8 +107,8 @@ func TestDispatcher_InsufficientRole_ReturnsForbidden(t *testing.T) {
 
 func TestDispatcher_SchemaValidationError_ReturnsBadRequest(t *testing.T) {
 	routes := dgw.NewRouteMap([]dgw.RouteEntry{
-		{Method: "POST", Path: "/users", WorkerID: "go:api", Validate: "user_create",
-		})
+		{Method: "POST", Path: "/users", WorkerID: "go:api", Validate: "user_create"},
+	})
 	d := makeDispatcher(routes, &mockTransport{}, &mockJWT{}, &mockSchema{err: errors.New("missing field")}, lifecycle.NewWorkerDrainer())
 
 	_, err := d.Dispatch(context.Background(), &dgw.GatewayRequest{
@@ -145,7 +145,7 @@ func TestDispatcher_WorkerError_Returns502(t *testing.T) {
 		{Method: "GET", Path: "/crash", WorkerID: "go:api"},
 	})
 	transport := &mockTransport{respMsg: ipc.Message{Type: ipc.TypeError, Payload: []byte(`worker panic`)}}
-	d := makeDispatcher(routes, transport, &mockJWT{}, &mockSchema{})
+	d := makeDispatcher(routes, transport, &mockJWT{}, &mockSchema{}, nil)
 
 	resp, err := d.Dispatch(context.Background(), &dgw.GatewayRequest{
 		Method: "GET", Path: "/crash",
@@ -193,7 +193,7 @@ func TestDispatcher_Hooks_FullPipeline(t *testing.T) {
 	})
 	transport := &mockTransport{respMsg: ipc.Message{Type: ipc.TypeResponse, Payload: []byte(`{"ok":true}`)}}
 	rec := &hookRecorder{}
-	d := apgw.NewDispatcher(routes, transport, &mockJWT{}, &mockSchema{}, 5*time.Second, zap.NewNop(),
+	d := apgw.NewDispatcher(routes, transport, &mockJWT{}, &mockSchema{}, 5*time.Second, zap.NewNop(), nil,
 		apgw.WithProxyListeners(rec))
 
 	_, err := d.Dispatch(context.Background(), &dgw.GatewayRequest{
@@ -226,7 +226,7 @@ func TestDispatcher_Hooks_FullPipeline(t *testing.T) {
 func TestDispatcher_Hooks_OnError(t *testing.T) {
 	routes := dgw.NewRouteMap(nil)
 	rec := &hookRecorder{}
-	d := apgw.NewDispatcher(routes, &mockTransport{}, &mockJWT{}, &mockSchema{}, 5*time.Second, zap.NewNop(),
+	d := apgw.NewDispatcher(routes, &mockTransport{}, &mockJWT{}, &mockSchema{}, 5*time.Second, zap.NewNop(), nil,
 		apgw.WithProxyListeners(rec))
 
 	_, _ = d.Dispatch(context.Background(), &dgw.GatewayRequest{
@@ -251,7 +251,7 @@ func TestDispatcher_Hooks_EarlyReturn(t *testing.T) {
 		},
 	}
 
-	d := apgw.NewDispatcher(routes, &mockTransport{}, &mockJWT{}, &mockSchema{}, 5*time.Second, zap.NewNop(),
+	d := apgw.NewDispatcher(routes, &mockTransport{}, &mockJWT{}, &mockSchema{}, 5*time.Second, zap.NewNop(), nil,
 		apgw.WithProxyListeners(blocker))
 
 	resp, err := d.Dispatch(context.Background(), &dgw.GatewayRequest{

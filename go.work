@@ -1,0 +1,8 @@
+go 1.24.0
+
+use (
+	.
+	./core
+	./cmd/vyx
+	./examples/hello-world/workers/go
+)
