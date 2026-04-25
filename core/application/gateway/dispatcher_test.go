@@ -44,8 +44,8 @@ func (m *mockTransport) Register(_ context.Context, _ string) error   { return n
 func (m *mockTransport) Deregister(_ context.Context, _ string) error { return nil }
 func (m *mockTransport) Close() error                                  { return nil }
 
-func makeDispatcher(routes *dgw.RouteMap, transport *mockTransport, jwt *mockJWT, schema *mockSchema) *apgw.Dispatcher {
-	return apgw.NewDispatcher(routes, transport, jwt, schema, 5*time.Second, zap.NewNop())
+func makeDispatcher(routes *dgw.RouteMap, transport *mockTransport, jwt *mockJWT, schema *mockSchema, drainer *lifecycle.WorkerDrainer) *apgw.Dispatcher {
+	return apgw.NewDispatcher(routes, transport, jwt, schema, 5*time.Second, zap.NewNop(), drainer)
 }
 
 // --- tests ---
