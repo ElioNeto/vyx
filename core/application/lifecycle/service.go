@@ -98,14 +98,16 @@ func (s *Service) StopWorker(ctx context.Context, id string) error {
 		shutdownTimeout = w.ShutdownTimeout
 	}
 
-	// Drain in‑flight requests before terminating the process.
+// Drain in‑flight requests before terminating the process.
 	if s.drainer != nil {
+		s.drainer.MarkDraining(id)
 		if err := s.drainer.Drain(ctx, id, shutdownTimeout); err != nil {
 			// If draining times out, continue with stop to avoid stuck workers.
-			// The caller can inspect the error if needed.
+			//The caller can inspect the error if needed.
 			// For now we log via publish with details.
 			 s.publish(ctx, worker.EventStopped, w, "drain timeout, proceeding to stop")
 		}
+	}
 	}
 
 	if err := s.manager.Stop(ctx, id); err != nil {
@@ -223,13 +225,14 @@ func (s *Service) RestartWorker(ctx context.Context, id string) error {
 	_ = s.manager.Stop(ctx, id)
 
 // Drain before stop (reuse same logic as StopWorker).
-if s.drainer != nil {
-	shutdownTimeout := 30 * time.Second
-	if w.ShutdownTimeout > 0 {
-		shutdownTimeout = w.ShutdownTimeout
+	if s.drainer != nil {
+		shutdownTimeout := 30 * time.Second
+		if w.ShutdownTimeout > 0 {
+			shutdownTimeout = w.ShutdownTimeout
+		}
+		s.drainer.MarkDraining(id)
+		_ = s.drainer.Drain(ctx, id, shutdownTimeout)
 	}
-	_ = s.drainer.Drain(ctx, id, shutdownTimeout)
-}
 // Stop the old process.
 if err := s.manager.Stop(ctx, id); err != nil {
 	return err

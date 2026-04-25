@@ -10,15 +10,18 @@ import (
 // WorkerDrainer manages in-flight request tracking and graceful draining
 // for worker processes during shutdown or restart operations.
 type WorkerDrainer struct {
-	mu         sync.RWMutex
-	inflight   map[string]*sync.WaitGroup // workerID -> WaitGroup for active requests
-	shutdownCh context.CancelFunc         // optional shutdown context cancel for early abort
-}
+im
+    mu         sync.RWMutex
+    inflight   map[string]*sync.WaitGroup
+    draining   map[string]bool  // NOVO: Estado de drain ativo
+    shutdownCh context.CancelFunc
+
 
 // NewWorkerDrainer creates a new WorkerDrainer instance.
 func NewWorkerDrainer() *WorkerDrainer {
 	return &WorkerDrainer{
 		inflight: make(map[string]*sync.WaitGroup),
+		draining: make(map[string]bool),
 	}
 }
 
@@ -80,13 +83,20 @@ func (d *WorkerDrainer) Drain(ctx context.Context, workerID string, timeout time
 	}
 }
 
+// MarkDraining marca o worker como em estado de drain antes da chamada Drain.
+// Deve ser chamado pelo lifecycle.Service antes de iniciar o Drain.
+func (d *WorkerDrainer) MarkDraining(workerID string) {
+	d.mu.Lock()
+	d.draining[workerID] = true
+	d.mu.Unlock()
+}
+
 // IsDraining returns true if the worker is currently in a draining state.
 // Note: This is advisory; actual draining is controlled by Drain().
 func (d *WorkerDrainer) IsDraining(workerID string) bool {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	_, exists := d.inflight[workerID]
-	return exists
+    d.mu.RLock()
+    defer d.mu.RUnlock()
+    return d.draining[workerID]
 }
 
 // Cleanup removes internal state for a worker after it has been stopped.
@@ -95,4 +105,5 @@ func (d *WorkerDrainer) Cleanup(workerID string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	delete(d.inflight, workerID)
+	delete(d.draining, workerID)
 }
