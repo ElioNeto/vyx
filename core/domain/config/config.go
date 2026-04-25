@@ -31,7 +31,7 @@ type WorkerConfig struct {
 	Replicas        int           `yaml:"replicas"`
 	Strategy        string        `yaml:"strategy"`         // "round-robin" | "least-loaded"
 	StartupTimeout  time.Duration `yaml:"startup_timeout"`
-	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
+	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"` // max time to wait for in-flight requests
 }
 
 // SecurityConfig holds JWT, rate-limiting and payload settings.
@@ -108,6 +108,9 @@ func (c *Config) Validate() error {
 		validStrategies := map[string]bool{"round-robin": true, "least-loaded": true, "": true}
 		if !validStrategies[w.Strategy] {
 			errs = append(errs, fmt.Errorf("workers[%d].strategy %q is invalid; use \"round-robin\" or \"least-loaded\" (id: %q)", i, w.Strategy, w.ID))
+		}
+		if w.ShutdownTimeout < 0 {
+			errs = append(errs, fmt.Errorf("workers[%d].shutdown_timeout must be >= 0 (id: %q)", i, w.ID))
 		}
 	}
 

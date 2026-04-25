@@ -13,6 +13,7 @@ import (
 
 	dgw "github.com/ElioNeto/vyx/core/domain/gateway"
 	"github.com/ElioNeto/vyx/core/domain/ipc"
+	"github.com/ElioNeto/vyx/core/application/lifecycle"
 )
 
 // JWTValidator extracts and verifies a raw JWT string, returning the claims.
@@ -34,6 +35,7 @@ type Dispatcher struct {
 	timeout   time.Duration
 	log       *zap.Logger
 	listeners []ProxyListener
+	drainer   *lifecycle.WorkerDrainer
 }
 
 // NewDispatcher creates a Dispatcher wired with all required dependencies.
@@ -44,6 +46,7 @@ func NewDispatcher(
 	schema SchemaValidator,
 	timeout time.Duration,
 	log *zap.Logger,
+	drainer *lifecycle.WorkerDrainer,
 	opts ...DispatcherOption,
 ) *Dispatcher {
 	d := &Dispatcher{
@@ -53,6 +56,7 @@ func NewDispatcher(
 		schema:    schema,
 		timeout:   timeout,
 		log:       log,
+		drainer:   drainer,
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -142,6 +146,19 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 			statusCode = resp.StatusCode
 			return resp, lc.Err
 		}
+	}
+
+	// 1b. Check if worker is draining - reject new requests with 503
+	if d.drainer != nil && d.drainer.IsDraining(route.WorkerID) {
+		statusCode = 503
+		lc.StatusCode = 503
+		lc.Err = fmt.Errorf("worker %s is draining", route.WorkerID)
+		lc.Phase = PhasePreDispatch
+		return &dgw.GatewayResponse{
+			StatusCode: 503,
+			Headers:    map[string]string{"Retry-After": "1"},
+			Body:       []byte(`{"error":"worker draining"}`),
+		}, nil
 	}
 
 	// 2. JWT validation (skip if no auth roles defined).

@@ -22,6 +22,7 @@ type Service struct {
 	publisher worker.EventPublisher
 	transport ipc.Transport
 	receiver  ReceiverStarter
+	drainer   *WorkerDrainer
 }
 
 // NewService constructs a lifecycle Service.
@@ -31,6 +32,7 @@ func NewService(
 	publisher worker.EventPublisher,
 	transport ipc.Transport,
 	receiver ReceiverStarter,
+	drainer *WorkerDrainer,
 ) *Service {
 	return &Service{
 		repo:      repo,
@@ -38,6 +40,7 @@ func NewService(
 		publisher: publisher,
 		transport: transport,
 		receiver:  receiver,
+		drainer:   drainer,
 	}
 }
 
@@ -89,6 +92,22 @@ func (s *Service) StopWorker(ctx context.Context, id string) error {
 		return worker.ErrNotFound
 	}
 
+	// Determine shutdown timeout – default 30s if zero.
+	shutdownTimeout := 30 * time.Second
+	if w.ShutdownTimeout > 0 {
+		shutdownTimeout = w.ShutdownTimeout
+	}
+
+	// Drain in‑flight requests before terminating the process.
+	if s.drainer != nil {
+		if err := s.drainer.Drain(ctx, id, shutdownTimeout); err != nil {
+			// If draining times out, continue with stop to avoid stuck workers.
+			// The caller can inspect the error if needed.
+			// For now we log via publish with details.
+			 s.publish(ctx, worker.EventStopped, w, "drain timeout, proceeding to stop")
+		}
+	}
+
 	if err := s.manager.Stop(ctx, id); err != nil {
 		return err
 	}
@@ -97,6 +116,11 @@ func (s *Service) StopWorker(ctx context.Context, id string) error {
 	w.UpdatedAt = time.Now()
 	_ = s.repo.Save(ctx, w)
 	s.publish(ctx, worker.EventStopped, w, "graceful stop")
+
+	// Clean drainer state.
+	if s.drainer != nil {
+		s.drainer.Cleanup(id)
+	}
 
 	return nil
 }
@@ -198,23 +222,35 @@ func (s *Service) RestartWorker(ctx context.Context, id string) error {
 
 	_ = s.manager.Stop(ctx, id)
 
-	// Recreate the IPC endpoint so the restarted worker can connect.
-	// The small sleep between Deregister and Register gives the OS time to
-	// fully recycle the previous pipe handle before we call CreateNamedPipe
-	// again with the same name. Without this gap the new ConnectNamedPipe
-	// goroutine can race with the dying worker process and inherit its
-	// broken handle — producing the "pipe has been ended" loop.
-	if s.transport != nil {
-		_ = s.transport.Deregister(ctx, id)
-		time.Sleep(5 * time.Millisecond)
-		if err := s.transport.Register(ctx, id); err != nil {
-			w.State = worker.StateStopped
-			w.UpdatedAt = time.Now()
-			_ = s.repo.Save(ctx, w)
-			s.publish(ctx, worker.EventStopped, w, "restart failed: transport re-register: "+err.Error())
-			return worker.ErrSpawnFailed
-		}
+// Drain before stop (reuse same logic as StopWorker).
+if s.drainer != nil {
+	shutdownTimeout := 30 * time.Second
+	if w.ShutdownTimeout > 0 {
+		shutdownTimeout = w.ShutdownTimeout
 	}
+	_ = s.drainer.Drain(ctx, id, shutdownTimeout)
+}
+// Stop the old process.
+if err := s.manager.Stop(ctx, id); err != nil {
+	return err
+}
+// Recreate the IPC endpoint so the restarted worker can connect.
+// The small sleep between Deregister and Register gives the OS time to
+// fully recycle the previous pipe handle before we call CreateNamedPipe
+// again with the same name. Without this gap the new ConnectNamedPipe
+// goroutine can race with the dying worker process and inherit its
+// broken handle — producing the "pipe has been ended" loop.
+if s.transport != nil {
+	_ = s.transport.Deregister(ctx, id)
+	time.Sleep(5 * time.Millisecond)
+	if err := s.transport.Register(ctx, id); err != nil {
+		w.State = worker.StateStopped
+		w.UpdatedAt = time.Now()
+		_ = s.repo.Save(ctx, w)
+		s.publish(ctx, worker.EventStopped, w, "restart failed: transport re-register: "+err.Error())
+		return worker.ErrSpawnFailed
+	}
+}
 
 	if err := s.manager.Spawn(ctx, w); err != nil {
 		w.State = worker.StateStopped
