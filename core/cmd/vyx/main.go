@@ -369,6 +369,7 @@ func runServer(devMode bool, withTUI bool) {
 
 	// --- Core services ---
 	repo := repository.NewMemoryWorkerRepository()
+	drainer := lifecycle.NewWorkerDrainer()
 
 	// Wire manager to capture worker output when TUI is enabled.
 	var managerOpts []process.Option
@@ -384,7 +385,7 @@ func runServer(devMode bool, withTUI bool) {
 
 	// lifecycle.Service needs the transport (to re-register on restart) and
 	// the receiver (to re-arm the heartbeat loop after restart).
-	service := lifecycle.NewService(repo, manager, publisher, transport, hbReceiver)
+	service := lifecycle.NewService(repo, manager, publisher, transport, hbReceiver, drainer)
 
 	// Now wire the service back into the receiver (it needs service for MarkRunning etc).
 	hbReceiver.SetService(service)
@@ -408,6 +409,7 @@ func runServer(devMode bool, withTUI bool) {
 		schemaValidator,
 		cfg.Security.GlobalTimeout,
 		log,
+		drainer,
 	)
 
 	// --- Rate limiter ---

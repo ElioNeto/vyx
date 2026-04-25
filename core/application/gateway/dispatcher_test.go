@@ -52,7 +52,7 @@ func makeDispatcher(routes *dgw.RouteMap, transport *mockTransport, jwt *mockJWT
 
 func TestDispatcher_RouteNotFound(t *testing.T) {
 	routes := dgw.NewRouteMap(nil)
-	d := makeDispatcher(routes, &mockTransport{}, &mockJWT{}, &mockSchema{})
+	d := makeDispatcher(routes, &mockTransport{}, &mockJWT{}, &mockSchema{}, lifecycle.NewWorkerDrainer())
 
 	_, err := d.Dispatch(context.Background(), &dgw.GatewayRequest{Method: "GET", Path: "/unknown"})
 	if !errors.Is(err, dgw.ErrRouteNotFound) {
@@ -64,7 +64,7 @@ func TestDispatcher_MissingJWT_ReturnsUnauthorized(t *testing.T) {
 	routes := dgw.NewRouteMap([]dgw.RouteEntry{
 		{Method: "GET", Path: "/secure", WorkerID: "node:api", AuthRoles: []string{"admin"}},
 	})
-	d := makeDispatcher(routes, &mockTransport{}, &mockJWT{}, &mockSchema{})
+	d := makeDispatcher(routes, &mockTransport{}, &mockJWT{}, &mockSchema{}, lifecycle.NewWorkerDrainer())
 
 	_, err := d.Dispatch(context.Background(), &dgw.GatewayRequest{
 		Method: "GET", Path: "/secure",
@@ -79,7 +79,7 @@ func TestDispatcher_InvalidJWT_ReturnsUnauthorized(t *testing.T) {
 	routes := dgw.NewRouteMap([]dgw.RouteEntry{
 		{Method: "GET", Path: "/secure", WorkerID: "node:api", AuthRoles: []string{"admin"}},
 	})
-	d := makeDispatcher(routes, &mockTransport{}, &mockJWT{err: errors.New("bad token")}, &mockSchema{})
+	d := makeDispatcher(routes, &mockTransport{}, &mockJWT{err: errors.New("bad token")}, &mockSchema{}, lifecycle.NewWorkerDrainer())
 
 	_, err := d.Dispatch(context.Background(), &dgw.GatewayRequest{
 		Method: "GET", Path: "/secure",
@@ -94,7 +94,7 @@ func TestDispatcher_InsufficientRole_ReturnsForbidden(t *testing.T) {
 	routes := dgw.NewRouteMap([]dgw.RouteEntry{
 		{Method: "GET", Path: "/admin", WorkerID: "node:api", AuthRoles: []string{"admin"}},
 	})
-	d := makeDispatcher(routes, &mockTransport{}, &mockJWT{claims: &dgw.Claims{UserID: "u1", Roles: []string{"user"}}}, &mockSchema{})
+	d := makeDispatcher(routes, &mockTransport{}, &mockJWT{claims: &dgw.Claims{UserID: "u1", Roles: []string{"user"}}}, &mockSchema{}, lifecycle.NewWorkerDrainer())
 
 	_, err := d.Dispatch(context.Background(), &dgw.GatewayRequest{
 		Method: "GET", Path: "/admin",
@@ -107,9 +107,9 @@ func TestDispatcher_InsufficientRole_ReturnsForbidden(t *testing.T) {
 
 func TestDispatcher_SchemaValidationError_ReturnsBadRequest(t *testing.T) {
 	routes := dgw.NewRouteMap([]dgw.RouteEntry{
-		{Method: "POST", Path: "/users", WorkerID: "go:api", Validate: "user_create"},
-	})
-	d := makeDispatcher(routes, &mockTransport{}, &mockJWT{}, &mockSchema{err: errors.New("missing field")})
+		{Method: "POST", Path: "/users", WorkerID: "go:api", Validate: "user_create",
+		})
+	d := makeDispatcher(routes, &mockTransport{}, &mockJWT{}, &mockSchema{err: errors.New("missing field")}, lifecycle.NewWorkerDrainer())
 
 	_, err := d.Dispatch(context.Background(), &dgw.GatewayRequest{
 		Method: "POST", Path: "/users",
@@ -125,8 +125,8 @@ func TestDispatcher_SuccessfulDispatch(t *testing.T) {
 	routes := dgw.NewRouteMap([]dgw.RouteEntry{
 		{Method: "GET", Path: "/ping", WorkerID: "go:api"},
 	})
-	transport := &mockTransport{respMsg: ipc.Message{Type: ipc.TypeResponse, Payload: []byte(`{"ok":true}`)}}
-	d := makeDispatcher(routes, transport, &mockJWT{}, &mockSchema{})
+	transport := &mockTransport{respMsg: ipc.Message{Type: ipc.TypeResponse, Payload: []byte(`{\"ok\":true}`)}}
+	d := makeDispatcher(routes, transport, &mockJWT{}, &mockSchema{}, lifecycle.NewWorkerDrainer())
 
 	resp, err := d.Dispatch(context.Background(), &dgw.GatewayRequest{
 		Method: "GET", Path: "/ping",

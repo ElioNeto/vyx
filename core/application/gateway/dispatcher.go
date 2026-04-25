@@ -161,6 +161,12 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 		}, nil
 	}
 
+	// 1c. Track in-flight request for graceful draining.
+	if d.drainer != nil {
+		d.drainer.Acquire(route.WorkerID)
+		defer d.drainer.Release(route.WorkerID)
+	}
+
 	// 2. JWT validation (skip if no auth roles defined).
 	if len(route.AuthRoles) > 0 {
 		token := req.Headers["Authorization"]
