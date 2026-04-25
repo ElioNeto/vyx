@@ -3,9 +3,8 @@ package lifecycle_test
 import (
 	"context"
 	"testing"
-
-	"github.com/ElioNeto/vyx/core/application/lifecycle"
 	"github.com/ElioNeto/vyx/core/domain/worker"
+	"github.com/ElioNeto/vyx/core/application/lifecycle"
 )
 
 // --- Mocks ---
@@ -41,7 +40,8 @@ func (p *mockPublisher) Publish(_ context.Context, e worker.Event) {
 func newTestService(manager worker.Manager) (*lifecycle.Service, *mockPublisher) {
 	repo := newMemRepo()
 	pub := &mockPublisher{}
-	return lifecycle.NewService(repo, manager, pub, nil, nil), pub
+	drainer := lifecycle.NewWorkerDrainer()
+	return lifecycle.NewService(repo, manager, pub, nil, nil, drainer), pub
 }
 
 // minimal in-memory repo for tests

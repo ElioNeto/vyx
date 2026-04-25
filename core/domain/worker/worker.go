@@ -30,7 +30,6 @@ type Worker struct {
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	ShutdownTimeout time.Duration // max time to wait for in-flight requests during drain
-	ShutdownTimeout time.Duration // max time to wait for in-flight requests during drain
 }
 
 // IsAlive returns true when the worker is in a healthy operational state.

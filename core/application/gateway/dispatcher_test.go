@@ -11,6 +11,7 @@ import (
 	apgw "github.com/ElioNeto/vyx/core/application/gateway"
 	dgw "github.com/ElioNeto/vyx/core/domain/gateway"
 	"github.com/ElioNeto/vyx/core/domain/ipc"
+	"github.com/ElioNeto/vyx/core/application/lifecycle"
 )
 
 // --- mocks ---
