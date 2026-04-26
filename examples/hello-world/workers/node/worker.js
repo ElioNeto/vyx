@@ -67,6 +67,7 @@ function handleListProducts(req) {
         { id: '3', name: 'Widget Gamma', price: 4.99 },
       ],
     },
+    correlation_id: req.headers['X-Request-Id'], // Propagate correlation ID
   };
 }
 
@@ -91,6 +92,7 @@ function handleGetProduct(req) {
     status_code: 200,
     headers: { 'Content-Type': 'application/json' },
     body: product,
+    correlation_id: req.headers['X-Request-Id'], // Propagate correlation ID
   };
 }
 

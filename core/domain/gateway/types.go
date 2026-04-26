@@ -28,7 +28,8 @@ type GatewayResponse struct {
 // WorkerResponse is the structured envelope that workers must return.
 // The Dispatcher deserialises the IPC payload into this struct (#39).
 type WorkerResponse struct {
-	StatusCode int               `json:"status_code"`
-	Headers    map[string]string `json:"headers,omitempty"`
-	Body       []byte            `json:"body,omitempty"`
+	StatusCode    int               `json:"status_code"`
+	Headers       map[string]string `json:"headers,omitempty"`
+	Body          []byte            `json:"body,omitempty"`
+	CorrelationID string            `json:"correlation_id,omitempty"`
 }

@@ -2,6 +2,7 @@ package gateway_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -57,6 +58,40 @@ func TestDispatcher_RouteNotFound(t *testing.T) {
 	_, err := d.Dispatch(context.Background(), &dgw.GatewayRequest{Method: "GET", Path: "/unknown"})
 	if !errors.Is(err, dgw.ErrRouteNotFound) {
 		t.Errorf("expected ErrRouteNotFound, got %v", err)
+	}
+}
+
+func TestDispatcher_CorrelationIDPropagation(t *testing.T) {
+	routes := dgw.NewRouteMap([]dgw.RouteEntry{
+		{Method: "GET", Path: "/test", WorkerID: "worker1"},
+	})
+
+	// Mock transport to return a worker response with a correlation ID
+	payload, _ := json.Marshal(dgw.WorkerResponse{
+		StatusCode:    200,
+		Headers:       map[string]string{"X-Custom": "val"},
+		CorrelationID: "worker-cid",
+	})
+	transport := &mockTransport{
+		respMsg: ipc.Message{
+			Payload: payload,
+		},
+	}
+	d := makeDispatcher(routes, transport, &mockJWT{}, &mockSchema{}, lifecycle.NewWorkerDrainer())
+
+	resp, err := d.Dispatch(context.Background(), &dgw.GatewayRequest{
+		Method: "GET", Path: "/test",
+		Headers: map[string]string{"X-Request-Id": "client-cid"},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if resp.Headers["X-Request-Id"] != "worker-cid" {
+		t.Errorf("expected correlation ID 'worker-cid', got '%s'", resp.Headers["X-Request-Id"])
+	}
+	if resp.Headers["X-Custom"] != "val" {
+		t.Errorf("expected header 'val', got '%s'", resp.Headers["X-Custom"])
 	}
 }
 

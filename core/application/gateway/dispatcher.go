@@ -298,9 +298,20 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 	lc.StatusCode = workerResp.StatusCode
 	lc.Phase = PhasePostDispatch
 
+	headers := workerResp.Headers
+	if headers == nil {
+		headers = make(map[string]string)
+	}
+
+	finalCorrelationID := correlationID
+	if workerResp.CorrelationID != "" {
+		finalCorrelationID = workerResp.CorrelationID
+	}
+	headers["X-Request-Id"] = finalCorrelationID
+
 	return &dgw.GatewayResponse{
 		StatusCode: workerResp.StatusCode,
-		Headers:    workerResp.Headers,
+		Headers:    headers,
 		Body:       workerResp.Body,
 	}, nil
 }

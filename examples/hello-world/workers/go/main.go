@@ -65,9 +65,10 @@ type request struct {
 }
 
 type response struct {
-	StatusCode int               `json:"status_code"`
-	Headers    map[string]string `json:"headers"`
-	Body       any               `json:"body"`
+	StatusCode    int               `json:"status_code"`
+	Headers       map[string]string `json:"headers"`
+	Body          any               `json:"body"`
+	CorrelationID string            `json:"correlation_id,omitempty"`
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
