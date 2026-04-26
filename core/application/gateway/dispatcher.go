@@ -58,6 +58,7 @@ func NewDispatcher(
 		timeout:   timeout,
 		log:       log,
 		drainer:   drainer,
+		hooks:     []RequestLifecycle{NewAccessLogLifecycle(log)},
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -103,28 +104,15 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 	if correlationID == "" {
 		correlationID = uuid.NewString()
 	}
+	req.Headers["X-Request-Id"] = correlationID
 
 	lc := NewLifecycleContext(req)
 	lc.CorrelationID = correlationID
-	userID := "-"
 	statusCode := 0
 
-	// Deferred access log emitted on every exit path (#40).
+	// Deferred listeners notification (access log now via AccessLogLifecycle hook).
 	defer func() {
 		latency := time.Since(start)
-		level := d.log.Info
-		if statusCode >= 400 {
-			level = d.log.Warn
-		}
-		level("access",
-			zap.String("method", req.Method),
-			zap.String("path", req.Path),
-			zap.String("user_id", userID),
-			zap.Int("status", statusCode),
-			zap.Duration("latency", latency),
-			zap.String("correlation_id", correlationID),
-		)
-		// Notify post-listener hooks.
 		for _, l := range d.listeners {
 			if statusCode >= 400 || lc.Err != nil {
 				l.OnError(lc, lc.Phase)
@@ -200,7 +188,6 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 			return nil, dgw.ErrUnauthorized
 		}
 		req.Claims = claims
-		userID = claims.UserID
 
 		// 3. Role-based authorisation.
 		if !hasRequiredRole(claims.Roles, route.AuthRoles) {
