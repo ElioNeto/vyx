@@ -72,7 +72,7 @@ func main() {
 		}
 		cmdNew(os.Args[2])
 	case "dev":
-		runDev(withTUI)
+		runServer(true, withTUI)
 	case "logs":
 		cmdLogs()
 	case "start":
@@ -449,7 +449,7 @@ func runServer(devMode bool, withTUI bool) {
 	// --- Start TUI in a separate goroutine when requested ---
 	if mux != nil {
 		go func() {
-			if err := tui.Run(ctx, mux, log); err != nil {
+			if err := tui.Run(mux); err != nil {
 				log.Error("tui exited with error", zap.Error(err))
 			}
 		}()
