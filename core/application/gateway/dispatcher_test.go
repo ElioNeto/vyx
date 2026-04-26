@@ -66,16 +66,14 @@ func TestDispatcher_CorrelationIDPropagation(t *testing.T) {
 		{Method: "GET", Path: "/test", WorkerID: "worker1"},
 	})
 
-	// Mock transport to return a worker response with a correlation ID
+	// Worker echoes its own correlation ID.
 	payload, _ := json.Marshal(dgw.WorkerResponse{
 		StatusCode:    200,
 		Headers:       map[string]string{"X-Custom": "val"},
 		CorrelationID: "worker-cid",
 	})
 	transport := &mockTransport{
-		respMsg: ipc.Message{
-			Payload: payload,
-		},
+		respMsg: ipc.Message{Payload: payload},
 	}
 	d := makeDispatcher(routes, transport, &mockJWT{}, &mockSchema{}, lifecycle.NewWorkerDrainer())
 
@@ -87,11 +85,46 @@ func TestDispatcher_CorrelationIDPropagation(t *testing.T) {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
-	if resp.Headers["X-Request-Id"] != "worker-cid" {
-		t.Errorf("expected correlation ID 'worker-cid', got '%s'", resp.Headers["X-Request-Id"])
+	// CorrelationID is now in GatewayResponse.CorrelationID, not resp.Headers (#52).
+	if resp.CorrelationID != "worker-cid" {
+		t.Errorf("resp.CorrelationID = %q, want %q", resp.CorrelationID, "worker-cid")
 	}
+	// Worker-provided headers are still forwarded as-is.
 	if resp.Headers["X-Custom"] != "val" {
-		t.Errorf("expected header 'val', got '%s'", resp.Headers["X-Custom"])
+		t.Errorf("resp.Headers[X-Custom] = %q, want %q", resp.Headers["X-Custom"], "val")
+	}
+	// The correlation ID must NOT be synthetically injected into resp.Headers.
+	if _, ok := resp.Headers["X-Request-Id"]; ok {
+		t.Error("X-Request-Id must not be injected into resp.Headers; it belongs in resp.CorrelationID")
+	}
+}
+
+func TestDispatcher_CorrelationIDFallback(t *testing.T) {
+	routes := dgw.NewRouteMap([]dgw.RouteEntry{
+		{Method: "GET", Path: "/test", WorkerID: "worker1"},
+	})
+
+	// Worker omits correlation_id (legacy worker).
+	payload, _ := json.Marshal(dgw.WorkerResponse{
+		StatusCode: 200,
+		Body:       []byte(`{"ok":true}`),
+	})
+	transport := &mockTransport{
+		respMsg: ipc.Message{Payload: payload},
+	}
+	d := makeDispatcher(routes, transport, &mockJWT{}, &mockSchema{}, lifecycle.NewWorkerDrainer())
+
+	resp, err := d.Dispatch(context.Background(), &dgw.GatewayRequest{
+		Method: "GET", Path: "/test",
+		Headers: map[string]string{"X-Request-Id": "client-cid"},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	// Falls back to the request-scoped correlation ID (#52).
+	if resp.CorrelationID != "client-cid" {
+		t.Errorf("resp.CorrelationID = %q, want %q", resp.CorrelationID, "client-cid")
 	}
 }
 
@@ -197,13 +230,13 @@ func TestDispatcher_WorkerError_Returns502(t *testing.T) {
 // --- ProxyListener hook tests ---
 
 type hookRecorder struct {
-	routeMatched bool
-	preDispatch  bool
-	postDispatch bool
-	onError      bool
-	errorPhase   apgw.Phase
+	routeMatched  bool
+	preDispatch   bool
+	postDispatch  bool
+	onError       bool
+	errorPhase    apgw.Phase
 	correlationID string
-	route        *dgw.RouteEntry
+	route         *dgw.RouteEntry
 }
 
 func (r *hookRecorder) OnRouteMatch(lc *apgw.LifecycleContext) {
@@ -211,12 +244,8 @@ func (r *hookRecorder) OnRouteMatch(lc *apgw.LifecycleContext) {
 	r.correlationID = lc.CorrelationID
 	r.route = lc.Route
 }
-func (r *hookRecorder) OnPreDispatch(lc *apgw.LifecycleContext) {
-	r.preDispatch = true
-}
-func (r *hookRecorder) OnPostDispatch(lc *apgw.LifecycleContext, _ time.Duration) {
-	r.postDispatch = true
-}
+func (r *hookRecorder) OnPreDispatch(lc *apgw.LifecycleContext)               { r.preDispatch = true }
+func (r *hookRecorder) OnPostDispatch(lc *apgw.LifecycleContext, _ time.Duration) { r.postDispatch = true }
 func (r *hookRecorder) OnError(lc *apgw.LifecycleContext, phase apgw.Phase) {
 	r.onError = true
 	r.errorPhase = phase
