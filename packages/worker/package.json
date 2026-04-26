@@ -1,0 +1,30 @@
+{
+  "name": "@vyx/worker",
+  "version": "0.1.0",
+  "description": "Node.js worker SDK for vyx",
+  "main": "src/index.js",
+  "types": "src/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "lint": "eslint src/",
+    "build": "tsc"
+  },
+  "keywords": [
+    "vyx",
+    "worker",
+    "sdk"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/jest": "^29.5.0",
+    "@types/node": "^20.0.0",
+    "eslint": "^8.56.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.0",
+    "typescript": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

@@ -1,2 +1,3 @@
 *.exe
 vyx
+node_modules
