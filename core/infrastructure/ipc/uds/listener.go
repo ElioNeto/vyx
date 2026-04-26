@@ -143,7 +143,7 @@ func (t *Transport) Register(ctx context.Context, workerID string) error {
 
 	// Enforce 0600 — net.Listen creates the file with umask-derived perms.
 	if err := os.Chmod(path, socketPerm); err != nil {
-		ln.Close()
+		_ = ln.Close()
 		return fmt.Errorf("uds: chmod %s: %w", path, err)
 	}
 
@@ -173,7 +173,7 @@ func (t *Transport) accept(ctx context.Context, workerID string, ln net.Listener
 
 	select {
 	case <-ctx.Done():
-		ln.Close()
+		_ = ln.Close()
 		return
 	case r := <-ch:
 		if r.err != nil {

@@ -339,7 +339,7 @@ func hotReloadWatcher(
 		log.Error("hot reload: failed to create watcher", zap.Error(err))
 		return
 	}
-	defer watcher.Close()
+	defer func() { _ = watcher.Close() }()
 
 	// Build the dir → workerIDs index and register watches.
 	entries := make([]workerWatchEntry, 0, len(workers))
@@ -520,7 +520,7 @@ func runServer(devMode bool, withTUI bool) {
 	if err != nil {
 		fatalf("logger: %v", err)
 	}
-	defer log.Sync()
+	defer func() { _ = log.Sync() }()
 
 	// --- Load config ---
 	configPath := defaultConfigPath
@@ -721,6 +721,9 @@ func runServer(devMode bool, withTUI bool) {
 					zap.String("command", wcfg.Command),
 					zap.Error(err),
 				)
+				if spawnCancel != nil {
+					spawnCancel()
+				}
 				continue
 			}
 			log.Info("worker spawned",

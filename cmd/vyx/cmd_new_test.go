@@ -13,7 +13,7 @@ func TestScaffoldProject_CreatesDirectoryTree(t *testing.T) {
 	tmpDir := t.TempDir()
 	origDir, _ := os.Getwd()
 	_ = os.Chdir(tmpDir)
-	defer os.Chdir(origDir)
+	defer func() { _ = os.Chdir(origDir) }()
 
 	if err := scaffoldProject("my-app"); err != nil {
 		t.Fatalf("scaffoldProject failed: %v", err)
@@ -39,7 +39,7 @@ func TestScaffoldProject_VyxYAML_IsValid(t *testing.T) {
 	tmpDir := t.TempDir()
 	origDir, _ := os.Getwd()
 	_ = os.Chdir(tmpDir)
-	defer os.Chdir(origDir)
+	defer func() { _ = os.Chdir(origDir) }()
 
 	if err := scaffoldProject("test-project"); err != nil {
 		t.Fatalf("scaffoldProject failed: %v", err)
@@ -80,7 +80,7 @@ func TestScaffoldProject_AlreadyExists_ReturnsError(t *testing.T) {
 	tmpDir := t.TempDir()
 	origDir, _ := os.Getwd()
 	_ = os.Chdir(tmpDir)
-	defer os.Chdir(origDir)
+	defer func() { _ = os.Chdir(origDir) }()
 
 	_ = os.Mkdir("existing-app", 0755)
 

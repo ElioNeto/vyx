@@ -16,7 +16,7 @@ import (
 func TestTransport_SendReceive(t *testing.T) {
 	dir := t.TempDir()
 	transport := uds.New(dir)
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -33,7 +33,7 @@ func TestTransport_SendReceive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial() error = %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	time.Sleep(20 * time.Millisecond)
 
 	want := ipc.Message{Type: ipc.TypeRequest, Payload: []byte(`{"route":"/api/users"}`)}
@@ -56,7 +56,7 @@ func TestTransport_SendReceive(t *testing.T) {
 func TestTransport_WorkerSendsHeartbeat(t *testing.T) {
 	dir := t.TempDir()
 	transport := uds.New(dir)
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -73,7 +73,7 @@ func TestTransport_WorkerSendsHeartbeat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial() error = %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	time.Sleep(20 * time.Millisecond)
 
 	hb := ipc.Message{Type: ipc.TypeHeartbeat, Payload: []byte{}}
@@ -118,7 +118,7 @@ func TestTransport_Deregister_RemovesSocketFile(t *testing.T) {
 func TestTransport_Send_WorkerNotConnected(t *testing.T) {
 	dir := t.TempDir()
 	transport := uds.New(dir)
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	ctx := context.Background()
 	msg := ipc.Message{Type: ipc.TypeRequest, Payload: []byte("test")}
@@ -136,7 +136,7 @@ func TestTransport_SocketPermissions(t *testing.T) {
 
 	dir := t.TempDir()
 	transport := uds.New(dir)
-	defer transport.Close()
+	defer func() { _ = transport.Close() }()
 
 	ctx := context.Background()
 	const workerID = "perm-worker"

@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -247,8 +246,4 @@ func (s *Server) writeError(w http.ResponseWriter, err error) {
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 	s.log.Warn("gateway error", zap.Int("status", code), zap.Error(err))
-}
-
-func formatDuration(d time.Duration) string {
-	return fmt.Sprintf("%s", d.Round(time.Second))
 }

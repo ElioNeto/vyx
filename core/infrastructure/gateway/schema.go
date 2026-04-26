@@ -153,9 +153,3 @@ func asValidationError(err error, target **jsonschema.ValidationError) bool {
 	}
 	return false
 }
-
-// schemaWarmUpSummary returns a JSON-serialisable summary for logging.
-func schemaWarmUpSummary(count int) string {
-	b, _ := json.Marshal(map[string]int{"schemas_compiled": count})
-	return string(b)
-}

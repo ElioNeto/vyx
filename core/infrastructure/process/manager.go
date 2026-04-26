@@ -70,8 +70,8 @@ func (m *Manager) Spawn(ctx context.Context, w *worker.Worker) error {
 		go m.pipeLog(m.logWriter, workerID, outReader)
 		go m.pipeLog(m.logWriter, workerID, errReader)
 
-		outWriter.Close()  // writer side — cmd will take over
-		errWriter.Close()
+		_ = outWriter.Close() // writer side — cmd will take over
+		_ = errWriter.Close()
 	} else {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr

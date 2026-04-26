@@ -13,7 +13,6 @@ type WorkerDrainer struct {
     mu         sync.RWMutex
     inflight   map[string]*sync.WaitGroup
     draining   map[string]bool  // NOVO: Estado de drain ativo
-    shutdownCh context.CancelFunc
 }
 
 // NewWorkerDrainer creates a new WorkerDrainer instance.

@@ -36,7 +36,7 @@ type lifecycleHook struct {
 
 func (h *lifecycleHook) OnBeforeDispatch(ctx context.Context, req *dgw.GatewayRequest, route *dgw.RouteEntry) error {
 	if h.onBeforeDispatch != nil {
-		h.onBeforeDispatch(ctx, req, route)
+		_ = h.onBeforeDispatch(ctx, req, route)
 	}
 	return h.onBeforeDispatchErr
 }

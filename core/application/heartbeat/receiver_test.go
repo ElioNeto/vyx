@@ -111,7 +111,7 @@ func TestReceiver_StartLoop_RecordsHeartbeat(t *testing.T) {
 	defer cancel()
 
 	// Pre-queue a TypeHeartbeat frame for w1.
-	transport.Send(ctx, "w1", ipc.Message{Type: ipc.TypeHeartbeat})
+	_ = transport.Send(ctx, "w1", ipc.Message{Type: ipc.TypeHeartbeat})
 
 	// Start a loop for w1 directly.
 	recv.StartLoop(ctx, "w1")

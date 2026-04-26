@@ -191,7 +191,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("[go:api] failed to connect to core: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	log.Printf("[go:api] connected to core via %s", *socketPath)
 
 	// Handshake — payload mirrors ipc.HandshakePayload (no "type" field).
@@ -221,7 +221,7 @@ func main() {
 	go func() {
 		<-sigCh
 		log.Println("[go:api] shutting down")
-		conn.Close()
+		_ = conn.Close()
 		os.Exit(0)
 	}()
 
