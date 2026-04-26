@@ -20,9 +20,10 @@ type GatewayRequest struct {
 
 // GatewayResponse holds the worker's reply to be sent back to the HTTP client.
 type GatewayResponse struct {
-	StatusCode int
-	Headers    map[string]string
-	Body       []byte
+	StatusCode    int
+	Headers       map[string]string
+	Body          []byte
+	CorrelationID string // echoed as X-Request-Id response header (#52)
 }
 
 // WorkerResponse is the structured envelope that workers must return.

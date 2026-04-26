@@ -191,6 +191,11 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := s.dispatcher.Dispatch(r.Context(), req)
 	if err != nil {
+		// Even on error paths, echo the request-scoped correlation ID (#52).
+		correlationID := r.Header.Get("X-Request-Id")
+		if correlationID != "" {
+			w.Header().Set("X-Request-Id", correlationID)
+		}
 		s.writeError(w, err)
 		return
 	}
@@ -202,6 +207,10 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(k, v)
 	}
 	w.Header().Set("Content-Type", "application/json")
+	// Always echo the correlation ID as X-Request-Id (#52).
+	if resp.CorrelationID != "" {
+		w.Header().Set("X-Request-Id", resp.CorrelationID)
+	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(resp.Body)
 }

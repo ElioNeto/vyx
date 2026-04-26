@@ -144,6 +144,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 		l.OnRouteMatch(lc)
 		if resp, aborted := lc.EarlyResponse(); aborted {
 			statusCode = resp.StatusCode
+			resp.CorrelationID = correlationID
 			return resp, lc.Err
 		}
 	}
@@ -155,9 +156,10 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 		lc.Err = fmt.Errorf("worker %s is draining", route.WorkerID)
 		lc.Phase = PhasePreDispatch
 		return &dgw.GatewayResponse{
-			StatusCode: 503,
-			Headers:    map[string]string{"Retry-After": "1"},
-			Body:       []byte(`{"error":"worker draining"}`),
+			StatusCode:    503,
+			Headers:       map[string]string{"Retry-After": "1"},
+			Body:          []byte(`{"error":"worker draining"}`),
+			CorrelationID: correlationID,
 		}, nil
 	}
 
@@ -219,6 +221,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 		l.OnPreDispatch(lc)
 		if resp, aborted := lc.EarlyResponse(); aborted {
 			statusCode = resp.StatusCode
+			resp.CorrelationID = correlationID
 			return resp, lc.Err
 		}
 	}
@@ -275,12 +278,11 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 		statusCode = 502
 		lc.StatusCode = 502
 		lc.Err = fmt.Errorf("worker error: %s", string(respMsg.Payload))
-		return &dgw.GatewayResponse{StatusCode: 502, Body: respMsg.Payload}, nil
-	}
-
-	if respMsg.Type == ipc.TypeError {
-		statusCode = 502
-		return &dgw.GatewayResponse{StatusCode: 502, Body: respMsg.Payload}, nil
+		return &dgw.GatewayResponse{
+			StatusCode:    502,
+			Body:          respMsg.Payload,
+			CorrelationID: correlationID,
+		}, nil
 	}
 
 	// 8. Decode the structured worker response envelope (#39).
@@ -288,7 +290,11 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 	if err := json.Unmarshal(respMsg.Payload, &workerResp); err != nil {
 		// Fallback: treat raw payload as 200 body for backwards compatibility.
 		statusCode = 200
-		return &dgw.GatewayResponse{StatusCode: 200, Body: respMsg.Payload}, nil
+		return &dgw.GatewayResponse{
+			StatusCode:    200,
+			Body:          respMsg.Payload,
+			CorrelationID: correlationID,
+		}, nil
 	}
 
 	if workerResp.StatusCode == 0 {
@@ -298,21 +304,18 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 	lc.StatusCode = workerResp.StatusCode
 	lc.Phase = PhasePostDispatch
 
-	headers := workerResp.Headers
-	if headers == nil {
-		headers = make(map[string]string)
+	// 9. Resolve the final correlation ID (#52):
+	//    prefer the one echoed by the worker; fall back to the request-scoped ID.
+	respCorrelationID := workerResp.CorrelationID
+	if respCorrelationID == "" {
+		respCorrelationID = correlationID
 	}
-
-	finalCorrelationID := correlationID
-	if workerResp.CorrelationID != "" {
-		finalCorrelationID = workerResp.CorrelationID
-	}
-	headers["X-Request-Id"] = finalCorrelationID
 
 	return &dgw.GatewayResponse{
-		StatusCode: workerResp.StatusCode,
-		Headers:    headers,
-		Body:       workerResp.Body,
+		StatusCode:    workerResp.StatusCode,
+		Headers:       workerResp.Headers,
+		Body:          workerResp.Body,
+		CorrelationID: respCorrelationID,
 	}, nil
 }
 
