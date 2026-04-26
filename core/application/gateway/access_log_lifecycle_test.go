@@ -1,10 +1,14 @@
 package gateway_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest"
 
 	apgw "github.com/ElioNeto/vyx/core/application/gateway"
@@ -85,6 +89,33 @@ func TestAccessLogLifecycle_OnWorkerError_EmitsError(t *testing.T) {
 
 	workerErr := errors.New("worker unavailable")
 	hook.OnWorkerError(context.Background(), "worker-1", req, workerErr)
+}
+
+func TestAccessLogLifecycle_MissingStartTime(t *testing.T) {
+	var buf bytes.Buffer
+	encoder := zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig())
+	core := zapcore.NewCore(encoder, zapcore.AddSync(&buf), zap.WarnLevel)
+	logger := zap.New(core)
+	hook := apgw.NewAccessLogLifecycle(logger)
+
+	req := &dgw.GatewayRequest{
+		Method:  "GET",
+		Path:   "/api/users",
+		Headers: map[string]string{"X-Request-Id": "test-cid-missing"},
+		Claims: &dgw.Claims{UserID: "user-99"},
+	}
+
+	resp := &dgw.GatewayResponse{
+		StatusCode:    200,
+		Body:         []byte(`{"ok":true}`),
+		CorrelationID: "test-cid-missing",
+	}
+
+	hook.OnAfterDispatch(context.Background(), req, resp)
+
+	if !strings.Contains(buf.String(), "access_log: start time not found, latency will be inaccurate") {
+		t.Fatalf("expected warning log about missing start time, got: %s", buf.String())
+	}
 }
 
 func TestAccessLogLifecycle_ImplementsRequestLifecycle(t *testing.T) {

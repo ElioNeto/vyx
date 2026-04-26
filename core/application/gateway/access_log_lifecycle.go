@@ -28,12 +28,17 @@ func (a *AccessLogLifecycle) OnBeforeDispatch(ctx context.Context, req *dgw.Gate
 func (a *AccessLogLifecycle) OnAfterDispatch(ctx context.Context, req *dgw.GatewayRequest, resp *dgw.GatewayResponse) {
 	correlationID := getCorrelationID(req)
 	userID := getUserID(req)
-	
+
 	startI, ok := a.startTimes.LoadAndDelete(correlationID)
+	var start time.Time
 	if !ok {
-		startI, _ = a.startTimes.Load(correlationID)
+		a.log.Warn("access_log: start time not found, latency will be inaccurate",
+			zap.String("correlation_id", correlationID),
+		)
+		start = time.Now()
+	} else {
+		start = startI.(time.Time)
 	}
-	start := startI.(time.Time)
 	latency := time.Since(start)
 
 	level := a.log.Info
@@ -52,6 +57,8 @@ func (a *AccessLogLifecycle) OnAfterDispatch(ctx context.Context, req *dgw.Gatew
 
 func (a *AccessLogLifecycle) OnWorkerError(ctx context.Context, workerID string, req *dgw.GatewayRequest, err error) {
 	correlationID := getCorrelationID(req)
+	// LoadAndDelete is safe here because we don't use the result; if no start time exists,
+	// we simply don't clean it up (no harm). The return value is ignored intentionally.
 	a.startTimes.LoadAndDelete(correlationID)
 	a.log.Error("worker-error",
 		zap.String("worker_id", workerID),
