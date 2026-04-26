@@ -36,6 +36,7 @@ type Dispatcher struct {
 	log       *zap.Logger
 	listeners []ProxyListener
 	drainer   *lifecycle.WorkerDrainer
+	hooks     []RequestLifecycle
 }
 
 // NewDispatcher creates a Dispatcher wired with all required dependencies.
@@ -71,6 +72,13 @@ type DispatcherOption func(*Dispatcher)
 func WithProxyListeners(listeners ...ProxyListener) DispatcherOption {
 	return func(d *Dispatcher) {
 		d.listeners = append(d.listeners, listeners...)
+	}
+}
+
+// WithLifecycleHooks adds RequestLifecycle hooks to the dispatcher.
+func WithLifecycleHooks(hooks ...RequestLifecycle) DispatcherOption {
+	return func(d *Dispatcher) {
+		d.hooks = append(d.hooks, hooks...)
 	}
 }
 
@@ -215,14 +223,15 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 		}
 	}
 
-	// 5. OnPreDispatch hooks — right before the IPC send.
+	// 5. RequestLifecycle hooks — right before the IPC send.
 	lc.Phase = PhasePreDispatch
-	for _, l := range d.listeners {
-		l.OnPreDispatch(lc)
-		if resp, aborted := lc.EarlyResponse(); aborted {
-			statusCode = resp.StatusCode
-			resp.CorrelationID = correlationID
-			return resp, lc.Err
+	for _, hook := range d.hooks {
+		if err := hook.OnBeforeDispatch(ctx, req, &route); err != nil {
+			statusCode = 400
+			lc.StatusCode = 400
+			lc.Err = err
+			lc.Phase = PhasePreDispatch
+			return nil, err
 		}
 	}
 
@@ -253,6 +262,9 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 		lc.StatusCode = 502
 		lc.Err = fmt.Errorf("gateway: send to worker %s: %w", route.WorkerID, err)
 		lc.Phase = PhasePreDispatch
+		for _, hook := range d.hooks {
+			hook.OnWorkerError(ctx, route.WorkerID, req, lc.Err)
+		}
 		return nil, lc.Err
 	}
 
@@ -265,12 +277,18 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 			lc.StatusCode = 504
 			lc.Err = dgw.ErrUpstreamTimeout
 			lc.Phase = PhasePostDispatch
+			for _, hook := range d.hooks {
+				hook.OnWorkerError(ctx, route.WorkerID, req, lc.Err)
+			}
 			return nil, dgw.ErrUpstreamTimeout
 		}
 		statusCode = 502
 		lc.StatusCode = 502
 		lc.Err = fmt.Errorf("gateway: receive from worker %s: %w", route.WorkerID, err)
 		lc.Phase = PhasePostDispatch
+		for _, hook := range d.hooks {
+			hook.OnWorkerError(ctx, route.WorkerID, req, lc.Err)
+		}
 		return nil, lc.Err
 	}
 
@@ -278,6 +296,9 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 		statusCode = 502
 		lc.StatusCode = 502
 		lc.Err = fmt.Errorf("worker error: %s", string(respMsg.Payload))
+		for _, hook := range d.hooks {
+			hook.OnWorkerError(ctx, route.WorkerID, req, lc.Err)
+		}
 		return &dgw.GatewayResponse{
 			StatusCode:    502,
 			Body:          respMsg.Payload,
@@ -290,11 +311,15 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 	if err := json.Unmarshal(respMsg.Payload, &workerResp); err != nil {
 		// Fallback: treat raw payload as 200 body for backwards compatibility.
 		statusCode = 200
-		return &dgw.GatewayResponse{
+		resp := &dgw.GatewayResponse{
 			StatusCode:    200,
 			Body:          respMsg.Payload,
 			CorrelationID: correlationID,
-		}, nil
+		}
+		for _, hook := range d.hooks {
+			hook.OnAfterDispatch(ctx, req, resp)
+		}
+		return resp, nil
 	}
 
 	if workerResp.StatusCode == 0 {
@@ -311,12 +336,16 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 		respCorrelationID = correlationID
 	}
 
-	return &dgw.GatewayResponse{
+	resp := &dgw.GatewayResponse{
 		StatusCode:    workerResp.StatusCode,
 		Headers:       workerResp.Headers,
 		Body:          workerResp.Body,
 		CorrelationID: respCorrelationID,
-	}, nil
+	}
+	for _, hook := range d.hooks {
+		hook.OnAfterDispatch(ctx, req, resp)
+	}
+	return resp, nil
 }
 
 // hasRequiredRole returns true if the caller holds at least one required role.
