@@ -1,7 +1,11 @@
 package runtime
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -36,21 +40,98 @@ func TestDetect(t *testing.T) {
 	}
 }
 
-func TestEnsure_Node_MissingFNM(t *testing.T) {
+func TestEnsure_Node_DownloadFails(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	original := fnmDownloadBaseURL
+	fnmDownloadBaseURL = ts.URL
+	defer func() { fnmDownloadBaseURL = original }()
+
 	tmpDir := t.TempDir()
 	vyxDir := filepath.Join(tmpDir, ".vyx")
 
-	loggerCalled := false
-	logger := func(msg string) {
-		loggerCalled = true
-	}
-
-	err := Ensure(context.Background(), RuntimeNode, "20", vyxDir, logger)
+	err := Ensure(context.Background(), RuntimeNode, "20", vyxDir, nil)
 	if err == nil {
-		t.Error("Ensure() should return error when fnm download fails")
+		t.Error("Ensure() should return error when download returns 404")
 	}
-	if !loggerCalled {
-		t.Error("Ensure() should call logger when downloading fnm")
+}
+
+func TestEnsure_Node_DownloadsMockFNM(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		fw, _ := zw.Create("fnm")
+		fw.Write([]byte("#!/bin/sh\necho fake fnm\n"))
+		zw.Close()
+		w.Header().Set("Content-Type", "application/zip")
+		w.WriteHeader(http.StatusOK)
+		w.Write(buf.Bytes())
+	}))
+	defer ts.Close()
+
+	original := fnmDownloadBaseURL
+	fnmDownloadBaseURL = ts.URL
+	defer func() { fnmDownloadBaseURL = original }()
+
+	tmpDir := t.TempDir()
+	vyxDir := filepath.Join(tmpDir, ".vyx")
+
+	var logs []string
+	logger := func(msg string) { logs = append(logs, msg) }
+
+	_ = Ensure(context.Background(), RuntimeNode, "20", vyxDir, logger)
+
+	fnmPath := filepath.Join(vyxDir, "runtimes", "fnm", "fnm")
+	if _, statErr := os.Stat(fnmPath); statErr != nil {
+		t.Errorf("fnm binary should exist after download, got stat error: %v", statErr)
+	}
+}
+
+func TestEnsure_Python_DownloadFails(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	original := uvDownloadBaseURL
+	uvDownloadBaseURL = ts.URL
+	defer func() { uvDownloadBaseURL = original }()
+
+	tmpDir := t.TempDir()
+	vyxDir := filepath.Join(tmpDir, ".vyx")
+
+	err := Ensure(context.Background(), RuntimePython, "3.12", vyxDir, nil)
+	if err == nil {
+		t.Error("Ensure() should return error when download returns 404")
+	}
+}
+
+func TestEnsure_Python_DownloadsMockUV(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("#!/bin/sh\necho fake uv\n"))
+	}))
+	defer ts.Close()
+
+	original := uvDownloadBaseURL
+	uvDownloadBaseURL = ts.URL
+	defer func() { uvDownloadBaseURL = original }()
+
+	tmpDir := t.TempDir()
+	vyxDir := filepath.Join(tmpDir, ".vyx")
+
+	var logs []string
+	logger := func(msg string) { logs = append(logs, msg) }
+
+	_ = Ensure(context.Background(), RuntimePython, "3.12", vyxDir, logger)
+
+	uvPath := filepath.Join(vyxDir, "runtimes", "uv", "uv")
+	if _, statErr := os.Stat(uvPath); statErr != nil {
+		t.Errorf("uv binary should exist after download, got stat error: %v", statErr)
 	}
 }
 
@@ -81,8 +162,8 @@ func TestResolve_NotInstalled(t *testing.T) {
 
 func TestRuntime_DefaultVersion(t *testing.T) {
 	tests := []struct {
-		rt      Runtime
-		want    string
+		rt   Runtime
+		want string
 	}{
 		{RuntimeNode, "20"},
 		{RuntimePython, "3.12"},

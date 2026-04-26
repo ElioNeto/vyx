@@ -39,6 +39,11 @@ var (
 	uvRepo   = "uv"
 )
 
+var (
+	fnmDownloadBaseURL = "https://github.com/Schniz/fnm/releases/latest/download"
+	uvDownloadBaseURL  = "https://github.com/astral-sh/uv/releases/latest/download"
+)
+
 var defaultVersions = map[Runtime]string{
 	RuntimeNode:   "20",
 	RuntimePython: "3.12",
@@ -287,8 +292,7 @@ func downloadFNM(ctx context.Context, targetDir string) error {
 		filename = fmt.Sprintf("fnm-%s-%s.zip", osName, arch)
 	}
 
-	url := fmt.Sprintf("https://github.com/%s/%s/releases/latest/download/%s",
-		fnmOwner, fnmRepo, filename)
+	url := fmt.Sprintf("%s/%s", fnmDownloadBaseURL, filename)
 
 	return downloadZip(ctx, url, targetDir, "fnm")
 }
@@ -305,8 +309,7 @@ func downloadUV(ctx context.Context, targetDir string) error {
 		filename = fmt.Sprintf("uv-%s-unknown-linux-%s", arch, arch)
 	}
 
-	url := fmt.Sprintf("https://github.com/%s/%s/releases/latest/download/%s",
-		uvOwner, uvRepo, filename)
+	url := fmt.Sprintf("%s/%s", uvDownloadBaseURL, filename)
 
 	uvPath := filepath.Join(targetDir, "uv")
 	if osName == "windows" {
