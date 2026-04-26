@@ -70,19 +70,13 @@ jobs:
       - name: Install uv
         run: pip install uv
 
-      - name: Install Python SDK dependencies
-        working-directory: packages/python
-        run: uv sync --dev
-
-      - name: Run Python SDK tests
+      - name: Install and test Python SDK
         working-directory: packages/python
         run: |
+          uv venv .venv
+          source .venv/bin/activate
+          uv sync --dev
           uv run pytest tests/ -v
-
-      - name: Run test runner (fallback)
-        if: success() != true
-        working-directory: packages/python
-        run: python3 run_tests.py
 
   node-sdk-test:
     runs-on: ubuntu-latest
