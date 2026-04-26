@@ -10,7 +10,7 @@ import (
 )
 
 // tsxRouteRe matches: // @Page(/some/path) or // @Page( /some/path )
-var tsxPageRe = regexp.MustCompile(`^\s*//\s*@Page\(\s*([^)]+?)\s*\)`)
+var tsxPageRe = regexp.MustCompile(`^\s*//\s*@Page\(\s*([^)]*)\s*\)`)
 
 // tsxAuthRe matches: // @Auth(roles: ["role1", "role2"])
 var tsxAuthRe = regexp.MustCompile(`^\s*//\s*@Auth\(roles:\s*\[([^\]]+)\]\s*\)`)
