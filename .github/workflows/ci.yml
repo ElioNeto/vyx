@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  build-test:
+  go-test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -55,3 +55,50 @@ jobs:
         uses: codecov/codecov-action@v3
         with:
           files: core/coverage.txt
+
+  python-sdk-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install Python SDK dependencies
+        working-directory: packages/python
+        run: uv sync --dev
+
+      - name: Run Python SDK tests
+        working-directory: packages/python
+        run: |
+          uv run pytest tests/ -v
+
+      - name: Run test runner (fallback)
+        if: success() != true
+        working-directory: packages/python
+        run: python3 run_tests.py
+
+  node-sdk-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Node.js SDK dependencies
+        working-directory: packages/worker
+        run: npm install
+
+      - name: Run Node.js SDK tests
+        working-directory: packages/worker
+        run: npm test
