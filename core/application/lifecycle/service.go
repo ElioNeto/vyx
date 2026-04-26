@@ -45,19 +45,20 @@ func NewService(
 }
 
 // SpawnWorker registers a new worker and starts its process.
-func (s *Service) SpawnWorker(ctx context.Context, id, command string, args []string, workDir string) (*worker.Worker, error) {
+func (s *Service) SpawnWorker(ctx context.Context, id, command string, args []string, workDir string, shutdownTimeout time.Duration) (*worker.Worker, error) {
 	if command == "" {
 		return nil, worker.ErrInvalidCommand
 	}
 
 	w := &worker.Worker{
-		ID:        id,
-		Command:   command,
-		Args:      args,
-		WorkDir:   workDir,
-		State:     worker.StateStarting,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		ID:            id,
+		Command:       command,
+		Args:          args,
+		WorkDir:       workDir,
+		ShutdownTimeout: shutdownTimeout,
+		State:         worker.StateStarting,
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
 	}
 
 	if err := s.repo.Save(ctx, w); err != nil {
@@ -107,7 +108,6 @@ func (s *Service) StopWorker(ctx context.Context, id string) error {
 			// For now we log via publish with details.
 			 s.publish(ctx, worker.EventStopped, w, "drain timeout, proceeding to stop")
 		}
-	}
 	}
 
 	if err := s.manager.Stop(ctx, id); err != nil {

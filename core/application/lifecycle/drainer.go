@@ -10,12 +10,11 @@ import (
 // WorkerDrainer manages in-flight request tracking and graceful draining
 // for worker processes during shutdown or restart operations.
 type WorkerDrainer struct {
-im
     mu         sync.RWMutex
     inflight   map[string]*sync.WaitGroup
     draining   map[string]bool  // NOVO: Estado de drain ativo
     shutdownCh context.CancelFunc
-
+}
 
 // NewWorkerDrainer creates a new WorkerDrainer instance.
 func NewWorkerDrainer() *WorkerDrainer {
