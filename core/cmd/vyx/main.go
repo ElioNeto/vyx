@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -308,6 +309,207 @@ func (w muxWriteSyncer) Write(p []byte) (int, error) {
 
 func (w muxWriteSyncer) Sync() error { return nil }
 
+// workerWatchEntry maps a resolved working directory to one or more worker IDs
+// that should be restarted when a file inside it changes.
+type workerWatchEntry struct {
+	workerIDs []string
+	absDir    string
+}
+
+// hotReloadWatcher starts an fsnotify watcher in dev mode. It watches each
+// worker's working_dir (falling back to ".") for source-file changes, debounces
+// rapid bursts within a 300 ms window, then calls service.RestartWorker for
+// every affected worker ID. RestartWorker already calls drainer.MarkDraining +
+// drainer.Drain before killing the old process, so zero in-flight requests are
+// dropped during the rolling restart.
+//
+// It also watches vyx.yaml itself: a change there sends SIGHUP to the current
+// process so cfgLoader.WatchSIGHUP picks it up without a full restart.
+func hotReloadWatcher(
+	ctx context.Context,
+	cfgPath string,
+	workers []doamincfg.WorkerConfig,
+	service *lifecycle.Service,
+	log *zap.Logger,
+) {
+	const debounce = 300 * time.Millisecond
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Error("hot reload: failed to create watcher", zap.Error(err))
+		return
+	}
+	defer watcher.Close()
+
+	// Build the dir → workerIDs index and register watches.
+	entries := make([]workerWatchEntry, 0, len(workers))
+	seenDirs := map[string]int{} // absDir → index in entries slice
+
+	for _, wcfg := range workers {
+		watchDir := wcfg.WorkingDir
+		if watchDir == "" {
+			watchDir = "."
+		}
+		if !filepath.IsAbs(watchDir) {
+			watchDir = filepath.Join(filepath.Dir(cfgPath), watchDir)
+		}
+		abs, err := filepath.Abs(watchDir)
+		if err != nil {
+			log.Warn("hot reload: could not resolve worker dir",
+				zap.String("worker_id", wcfg.ID),
+				zap.String("dir", watchDir),
+				zap.Error(err),
+			)
+			continue
+		}
+
+		replicas := wcfg.Replicas
+		if replicas <= 0 {
+			replicas = 1
+		}
+
+		// Collect all replica IDs for this config entry.
+		var ids []string
+		for i := 0; i < replicas; i++ {
+			wid := wcfg.ID
+			if replicas > 1 {
+				wid = fmt.Sprintf("%s-%d", wcfg.ID, i)
+			}
+			ids = append(ids, wid)
+		}
+
+		if idx, ok := seenDirs[abs]; ok {
+			// Multiple workers sharing the same dir — merge IDs.
+			entries[idx].workerIDs = append(entries[idx].workerIDs, ids...)
+		} else {
+			seenDirs[abs] = len(entries)
+			entries = append(entries, workerWatchEntry{absDir: abs, workerIDs: ids})
+			if err := watcher.Add(abs); err != nil {
+				log.Warn("hot reload: could not watch dir",
+					zap.String("dir", abs),
+					zap.Error(err),
+				)
+			} else {
+				log.Info("🔭 hot reload watching", zap.String("dir", abs))
+			}
+		}
+	}
+
+	// Also watch vyx.yaml so config changes trigger SIGHUP.
+	absCfgPath, _ := filepath.Abs(cfgPath)
+	if err := watcher.Add(filepath.Dir(absCfgPath)); err != nil {
+		log.Warn("hot reload: could not watch config dir",
+			zap.String("path", absCfgPath),
+			zap.Error(err),
+		)
+	}
+
+	// Per-worker debounce timers: workerID → pending timer.
+	type pending struct {
+		timer  *time.Timer
+		cancel chan struct{}
+	}
+	var mu sync.Mutex
+	timers := map[string]*pending{}
+
+	scheduleRestart := func(workerID string) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		if p, ok := timers[workerID]; ok {
+			// Reset the debounce window.
+			p.timer.Reset(debounce)
+			return
+		}
+
+		cancelCh := make(chan struct{})
+		t := time.AfterFunc(debounce, func() {
+			select {
+			case <-cancelCh:
+				return
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			mu.Lock()
+			delete(timers, workerID)
+			mu.Unlock()
+
+			log.Info("🔄 hot reload: restarting worker",
+				zap.String("worker_id", workerID),
+			)
+			restartCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+			defer cancel()
+			if err := service.RestartWorker(restartCtx, workerID); err != nil {
+				log.Error("hot reload: restart failed",
+					zap.String("worker_id", workerID),
+					zap.Error(err),
+				)
+			}
+		})
+		timers[workerID] = &pending{timer: t, cancel: cancelCh}
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			// Cancel all pending timers on shutdown.
+			mu.Lock()
+			for _, p := range timers {
+				p.timer.Stop()
+				close(p.cancel)
+			}
+			mu.Unlock()
+			return
+
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) == 0 {
+				continue
+			}
+
+			absEvt, _ := filepath.Abs(event.Name)
+
+			// vyx.yaml changed → send SIGHUP to self so cfgLoader picks it up.
+			if absEvt == absCfgPath {
+				log.Info("🔄 hot reload: vyx.yaml changed — reloading config (SIGHUP)")
+				if p, err := os.FindProcess(os.Getpid()); err == nil {
+					_ = p.Signal(syscall.SIGHUP)
+				}
+				continue
+			}
+
+			if !isSourceFile(event.Name) {
+				continue
+			}
+
+			// Find which entry owns this file.
+			for _, entry := range entries {
+				if strings.HasPrefix(absEvt, entry.absDir+string(filepath.Separator)) ||
+					absEvt == entry.absDir {
+					for _, wid := range entry.workerIDs {
+						log.Debug("hot reload: source change detected",
+							zap.String("file", event.Name),
+							zap.String("worker_id", wid),
+						)
+						scheduleRestart(wid)
+					}
+					break
+				}
+			}
+
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			log.Error("hot reload: watcher error", zap.Error(err))
+		}
+	}
+}
+
 func runServer(devMode bool, withTUI bool) {
 	var mux *ilog.Multiplexer
 	if withTUI {
@@ -455,29 +657,11 @@ func runServer(devMode bool, withTUI bool) {
 		}()
 	}
 
-    // --- Hot reload watcher ---
-    if devMode {
-        watcher, err := fsnotify.NewWatcher()
-        if err != nil {
-            log.Fatal("failed to create watcher", zap.Error(err))
-        }
-        defer watcher.Close()
-        go func() {
-            for {
-                select {
-                case event := <-watcher.Events:
-                    if event.Op&fsnotify.Write == fsnotify.Write && isSourceFile(event.Name) {
-                        log.Info("🔄 hot reloading", zap.String("file", event.Name))
-                        // In a real implementation we would identify the worker here.
-                        // For now, reload all workers or a specific one if possible.
-                    }
-                case err := <-watcher.Errors:
-                    log.Error("watcher error", zap.Error(err))
-                }
-            }
-        }()
-        _ = watcher.Add(".") // Watch current dir
-    }
+	// --- Hot reload watcher (dev mode only) ---
+	// Launched after service is fully wired so RestartWorker is safe to call.
+	if devMode {
+		go hotReloadWatcher(ctx, configPath, cfg.Workers, service, log)
+	}
 
 	// --- Auto-spawn workers from vyx.yaml ---
 	for _, wcfg := range cfg.Workers {
