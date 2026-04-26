@@ -3,10 +3,13 @@ package lifecycle
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"time"
 
 	"github.com/ElioNeto/vyx/core/domain/ipc"
 	"github.com/ElioNeto/vyx/core/domain/worker"
+	"github.com/ElioNeto/vyx/core/infrastructure/runtime"
 )
 
 // ReceiverStarter is the subset of heartbeat.Receiver used by the lifecycle
@@ -45,20 +48,40 @@ func NewService(
 }
 
 // SpawnWorker registers a new worker and starts its process.
-func (s *Service) SpawnWorker(ctx context.Context, id, command string, args []string, workDir string, shutdownTimeout time.Duration) (*worker.Worker, error) {
+func (s *Service) SpawnWorker(ctx context.Context, id, command string, args []string, workDir string, shutdownTimeout time.Duration, runtimeVersion, vyxDir string) (*worker.Worker, error) {
 	if command == "" {
 		return nil, worker.ErrInvalidCommand
 	}
 
+	vyxDir = resolveVyxDir(vyxDir)
+	rt := runtime.Detect(command)
+
+	if rt != runtime.RuntimeUnknown && runtime.NeedsProvisioning(command) {
+		rtVersion := runtimeVersion
+		if rtVersion == "" {
+			rtVersion = rt.DefaultVersion()
+		}
+		if err := runtime.Ensure(ctx, rt, rtVersion, vyxDir, nil); err != nil {
+			return nil, fmt.Errorf("ensure runtime: %w", err)
+		}
+
+		resolvedPath, err := runtime.Resolve(rt, vyxDir)
+		if err != nil {
+			return nil, fmt.Errorf("resolve runtime: %w", err)
+		}
+		command = resolvedPath + " " + command
+	}
+
 	w := &worker.Worker{
-		ID:            id,
-		Command:       command,
-		Args:          args,
-		WorkDir:       workDir,
+		ID:              id,
+		Command:         command,
+		Args:            args,
+		WorkDir:         workDir,
+		RuntimeVersion:  runtimeVersion,
 		ShutdownTimeout: shutdownTimeout,
-		State:         worker.StateStarting,
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
+		State:           worker.StateStarting,
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
 	}
 
 	if err := s.repo.Save(ctx, w); err != nil {
@@ -284,4 +307,15 @@ func (s *Service) publish(ctx context.Context, eventType worker.EventType, w *wo
 		Timestamp: time.Now(),
 		Details:   details,
 	})
+}
+
+func resolveVyxDir(vyxDir string) string {
+	if vyxDir != "" {
+		return vyxDir
+	}
+	envDir := os.Getenv("VYX_DIR")
+	if envDir != "" {
+		return envDir
+	}
+	return ".vyx"
 }

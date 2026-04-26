@@ -23,13 +23,14 @@ type Worker struct {
 	ID              string
 	Command         string
 	Args            []string
-	WorkDir         string        // optional: directory to run the command in
+	WorkDir         string
+	RuntimeVersion  string        // optional runtime version (e.g. "20", "3.12")
 	State           State
 	RestartCount    int
 	LastHeartbeat   time.Time
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
-	ShutdownTimeout time.Duration // max time to wait for in-flight requests during drain
+	ShutdownTimeout time.Duration
 }
 
 // IsAlive returns true when the worker is in a healthy operational state.

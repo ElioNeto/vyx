@@ -7,7 +7,21 @@ import (
 	"os/exec"
 	"os/signal"
 	"syscall"
+
+	"github.com/ElioNeto/vyx/core/infrastructure/runtime"
+	"gopkg.in/yaml.v3"
 )
+
+type workerConfig struct {
+	ID              string `yaml:"id"`
+	Command         string `yaml:"command"`
+	RuntimeVersion string `yaml:"runtime_version"`
+}
+
+type projectConfig struct {
+	Project string          `yaml:"project"`
+	Workers []workerConfig  `yaml:"workers"`
+}
 
 func runDev(args []string) {
 	fs := flag.NewFlagSet("dev", flag.ExitOnError)
@@ -25,6 +39,17 @@ func runDev(args []string) {
 	fmt.Printf("   config : %s\n", *configPath)
 	fmt.Printf("   addr   : %s\n", *addr)
 	fmt.Printf("   mode   : development (SIGHUP reloads config)\n")
+	fmt.Println()
+
+	fmt.Println("🔍 Detecting runtimes...")
+
+	vyxDir := ".vyx"
+	if d := os.Getenv("VYX_DIR"); d != "" {
+		vyxDir = d
+	}
+
+	detectAndEnsureRuntimes(vyxDir)
+
 	fmt.Println()
 
 	// Build the core binary first so we run the compiled version.
@@ -66,4 +91,48 @@ func runDev(args []string) {
 
 	_ = cmd.Wait()
 	fmt.Println("👋 vyx dev stopped")
+}
+
+func detectAndEnsureRuntimes(vyxDir string) {
+	cfg, err := loadConfig("vyx.yaml")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not load config: %v\n", err)
+		return
+	}
+
+	detected := make(map[runtime.Runtime]bool)
+	for _, w := range cfg.Workers {
+		rt := runtime.Detect(w.Command)
+		if rt == runtime.RuntimeUnknown || detected[rt] {
+			continue
+		}
+		detected[rt] = true
+
+		version := w.RuntimeVersion
+		if version == "" {
+			version = rt.DefaultVersion()
+		}
+
+		logger := func(msg string) {
+			fmt.Println(msg)
+		}
+
+		if err := runtime.Ensure(nil, rt, version, vyxDir, logger); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to ensure %s: %v\n", rt, err)
+		}
+	}
+}
+
+func loadConfig(path string) (*projectConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var cfg projectConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+
+	return &cfg, nil
 }

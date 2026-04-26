@@ -28,6 +28,7 @@ type WorkerConfig struct {
 	ID              string        `yaml:"id"`
 	Command         string        `yaml:"command"`
 	WorkingDir      string        `yaml:"working_dir"`      // optional: directory to run the command in
+	RuntimeVersion  string        `yaml:"runtime_version"` // optional: e.g. "20", "3.12"
 	Replicas        int           `yaml:"replicas"`
 	Strategy        string        `yaml:"strategy"`         // "round-robin" | "least-loaded"
 	StartupTimeout  time.Duration `yaml:"startup_timeout"`

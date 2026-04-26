@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -134,6 +135,22 @@ func scaffoldProject(name string) error {
 	for _, d := range []string{"backend/go", "backend/node", "backend/python", "frontend/src", "schemas"} {
 		gitkeep := filepath.Join(root, d, ".gitkeep")
 		_ = os.WriteFile(gitkeep, []byte{}, 0644)
+	}
+
+	gitignore := `# vyx managed runtimes and binaries
+.vyx/
+`
+	gitignorePath := filepath.Join(root, ".gitignore")
+	if _, err := os.Stat(gitignorePath); os.IsNotExist(err) {
+		if err := os.WriteFile(gitignorePath, []byte(gitignore), 0644); err != nil {
+			return fmt.Errorf("write .gitignore: %w", err)
+		}
+	} else {
+		existing, _ := os.ReadFile(gitignorePath)
+		if !bytes.Contains(existing, []byte(".vyx/")) {
+			updated := append(existing, []byte("\n"+gitignore)...)
+			_ = os.WriteFile(gitignorePath, updated, 0644)
+		}
 	}
 
 	return nil

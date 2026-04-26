@@ -2,7 +2,9 @@ package lifecycle_test
 
 import (
 	"context"
+	"os"
 	"testing"
+
 	"github.com/ElioNeto/vyx/core/domain/worker"
 	"github.com/ElioNeto/vyx/core/application/lifecycle"
 )
@@ -38,6 +40,7 @@ func (p *mockPublisher) Publish(_ context.Context, e worker.Event) {
 // --- Helpers ---
 
 func newTestService(manager worker.Manager) (*lifecycle.Service, *mockPublisher) {
+	os.Setenv("VYX_SKIP_RUNTIME", "1")
 	repo := newMemRepo()
 	pub := &mockPublisher{}
 	drainer := lifecycle.NewWorkerDrainer()
@@ -67,7 +70,7 @@ func TestSpawnWorker_Success(t *testing.T) {
 	mgr := &mockManager{}
 	svc, pub := newTestService(mgr)
 
-	w, err := svc.SpawnWorker(context.Background(), "node:api", "node", []string{"worker.js"}, "", 0)
+	w, err := svc.SpawnWorker(context.Background(), "node:api", "node", []string{"worker.js"}, "", 0, "", "")
 
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -87,7 +90,7 @@ func TestSpawnWorker_EmptyCommand(t *testing.T) {
 	mgr := &mockManager{}
 	svc, _ := newTestService(mgr)
 
-	_, err := svc.SpawnWorker(context.Background(), "node:api", "", nil, "", 0)
+	_, err := svc.SpawnWorker(context.Background(), "node:api", "", nil, "", 0, "", "")
 
 	if err != worker.ErrInvalidCommand {
 		t.Errorf("expected ErrInvalidCommand, got %v", err)
@@ -98,7 +101,7 @@ func TestSpawnWorker_SpawnFailure(t *testing.T) {
 	mgr := &mockManager{spawnErr: worker.ErrSpawnFailed}
 	svc, _ := newTestService(mgr)
 
-	_, err := svc.SpawnWorker(context.Background(), "node:api", "node", nil, "", 0)
+	_, err := svc.SpawnWorker(context.Background(), "node:api", "node", nil, "", 0, "", "")
 
 	if err != worker.ErrSpawnFailed {
 		t.Errorf("expected ErrSpawnFailed, got %v", err)
@@ -109,7 +112,7 @@ func TestStopWorker_Success(t *testing.T) {
 	mgr := &mockManager{}
 	svc, _ := newTestService(mgr)
 
-	_, _ = svc.SpawnWorker(context.Background(), "node:api", "node", nil, "", 0)
+	_, _ = svc.SpawnWorker(context.Background(), "node:api", "node", nil, "", 0, "", "")
 	_ = svc.MarkRunning(context.Background(), "node:api")
 	err := svc.StopWorker(context.Background(), "node:api")
 
@@ -136,7 +139,7 @@ func TestRecordHeartbeat_UpdatesTimestamp(t *testing.T) {
 	mgr := &mockManager{}
 	svc, _ := newTestService(mgr)
 
-	_, _ = svc.SpawnWorker(context.Background(), "node:api", "node", nil, "", 0)
+	_, _ = svc.SpawnWorker(context.Background(), "node:api", "node", nil, "", 0, "", "")
 	err := svc.RecordHeartbeat(context.Background(), "node:api")
 
 	if err != nil {
@@ -148,7 +151,7 @@ func TestRecordHeartbeat_UpdatesTimestamp(t *testing.T) {
 	mgr := &mockManager{}
 	svc, _ := newTestService(mgr)
 
-	_, _ = svc.SpawnWorker(context.Background(), "node:api", "node", nil, "", 0)
+	_, _ = svc.SpawnWorker(context.Background(), "node:api", "node", nil, "", 0, "", "")
 	_ = svc.MarkRunning(context.Background(), "node:api")
 	_ = svc.MarkUnhealthy(context.Background(), "node:api")
 	err := svc.RestartWorker(context.Background(), "node:api")
