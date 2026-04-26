@@ -41,6 +41,7 @@ import (
 	"github.com/ElioNeto/vyx/core/infrastructure/process"
 	"github.com/ElioNeto/vyx/core/infrastructure/repository"
 	"github.com/ElioNeto/vyx/core/cmd/tui"
+	"github.com/fsnotify/fsnotify"
 )
 
 const defaultConfigPath = "vyx.yaml"
@@ -71,7 +72,7 @@ func main() {
 		}
 		cmdNew(os.Args[2])
 	case "dev":
-		runServer(true, withTUI)
+		runDev(withTUI)
 	case "logs":
 		cmdLogs()
 	case "start":
@@ -448,11 +449,35 @@ func runServer(devMode bool, withTUI bool) {
 	// --- Start TUI in a separate goroutine when requested ---
 	if mux != nil {
 		go func() {
-			if err := tui.Run(mux); err != nil {
-				log.Error("TUI exited", zap.Error(err))
+			if err := tui.Run(ctx, mux, log); err != nil {
+				log.Error("tui exited with error", zap.Error(err))
 			}
 		}()
 	}
+
+    // --- Hot reload watcher ---
+    if devMode {
+        watcher, err := fsnotify.NewWatcher()
+        if err != nil {
+            log.Fatal("failed to create watcher", zap.Error(err))
+        }
+        defer watcher.Close()
+        go func() {
+            for {
+                select {
+                case event := <-watcher.Events:
+                    if event.Op&fsnotify.Write == fsnotify.Write && isSourceFile(event.Name) {
+                        log.Info("🔄 hot reloading", zap.String("file", event.Name))
+                        // In a real implementation we would identify the worker here.
+                        // For now, reload all workers or a specific one if possible.
+                    }
+                case err := <-watcher.Errors:
+                    log.Error("watcher error", zap.Error(err))
+                }
+            }
+        }()
+        _ = watcher.Add(".") // Watch current dir
+    }
 
 	// --- Auto-spawn workers from vyx.yaml ---
 	for _, wcfg := range cfg.Workers {
@@ -579,6 +604,17 @@ func runServer(devMode bool, withTUI bool) {
 		os.Exit(1)
 	}
 	log.Info("vyx core stopped cleanly")
+}
+
+// isSourceFile returns true if the file is a source file we want to watch for changes.
+func isSourceFile(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".go", ".ts", ".tsx", ".js":
+		return true
+	default:
+		return false
+	}
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────────
