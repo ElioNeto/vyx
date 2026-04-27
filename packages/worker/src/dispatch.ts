@@ -173,7 +173,7 @@ export function start(options: WorkerOptions): void {
   const socketPath =
     options.socketPath ??
     (process.platform === 'win32'
-      ? '\\\\.\\pipe\\vyx-node:api'
+      ? String.raw`\\.\pipe\vyx-node:api`
       : '/tmp/vyx/node:api.sock');
 
   console.log(`[${options.workerId}] connecting to ${socketPath}`);
@@ -212,6 +212,7 @@ export function start(options: WorkerOptions): void {
           try {
             req = JSON.parse(payload.toString());
           } catch (e) {
+            console.error(`[${options.workerId}] failed to parse request:`, e);
             break;
           }
           console.log(`[${options.workerId}] ${req.method} ${req.path}`);

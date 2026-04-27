@@ -1,41 +1,59 @@
-import { get as g, post as p, put as u, patch as pa, start as s, del } from './dispatch.js';
-import { getCorrelationId as gcid, requestContext, runInRequestContext, runInRequestContextAsync } from './context.js';
-import { createResponse as cr, json as j, text as t, error as e } from './request.js';
+import {
+  get,
+  post,
+  put,
+  patch,
+  start,
+  del,
+  getCorrelationId,
+  requestContext,
+  runInRequestContext,
+  runInRequestContextAsync,
+  createResponse,
+  json,
+  text,
+  error,
+} from './index.js';
 
 export {
-  g as get,
-  p as post,
-  u as put,
+  get,
+  post,
+  put,
+  patch,
+  start,
   del as delete,
-  pa as patch,
-  s as start,
-};
+} from './dispatch.js';
 
 export {
-  cr as createResponse,
-  j as json,
-  t as text,
-  e as error,
-};
+  createResponse,
+  json,
+  text,
+  error,
+} from './request.js';
 
-export { gcid as getCorrelationId, requestContext, runInRequestContext, runInRequestContextAsync };
+export {
+  getCorrelationId,
+  requestContext,
+  runInRequestContext,
+  runInRequestContextAsync,
+} from './context.js';
 export type { RequestStore } from './context.js';
 
 export type { IPCPayload, Claims, WorkerResponse, Request, Response } from './request.js';
 export type { WorkerOptions } from './dispatch.js';
 
 export const worker = {
-  get: g,
-  post: p,
-  put: u,
+  get,
+  post,
+  put,
   delete: del,
-  patch: pa,
-  start: s,
+  patch,
+  start,
 };
 
 export const logger = {
   info: (message: string, data?: Record<string, unknown>) => {
-    const reqId = gcid();
+    const reqId = getCorrelationId();
     console.log(
       JSON.stringify({
         level: 'info',
@@ -47,7 +65,7 @@ export const logger = {
     );
   },
   error: (message: string, data?: Record<string, unknown>) => {
-    const reqId = gcid();
+    const reqId = getCorrelationId();
     console.error(
       JSON.stringify({
         level: 'error',
@@ -59,7 +77,7 @@ export const logger = {
     );
   },
   warn: (message: string, data?: Record<string, unknown>) => {
-    const reqId = gcid();
+    const reqId = getCorrelationId();
     console.warn(
       JSON.stringify({
         level: 'warn',
@@ -71,7 +89,7 @@ export const logger = {
     );
   },
   debug: (message: string, data?: Record<string, unknown>) => {
-    const reqId = gcid();
+    const reqId = getCorrelationId();
     console.log(
       JSON.stringify({
         level: 'debug',

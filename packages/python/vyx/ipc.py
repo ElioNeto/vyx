@@ -5,6 +5,8 @@ from typing import Any
 
 import msgpack
 
+ERR_NOT_CONNECTED = "not connected"
+
 
 class MessageType:
     TYPE_HANDSHAKE = 0x01
@@ -53,7 +55,7 @@ class IPCClient:
     async def _write(self, msg: Message) -> None:
         """Write a framed message to the socket."""
         if not self.writer:
-            raise RuntimeError("not connected")
+            raise RuntimeError(ERR_NOT_CONNECTED)
 
         payload_len = len(msg.payload)
         header = struct.pack("<IB", payload_len, msg.type)
@@ -65,7 +67,7 @@ class IPCClient:
     async def _read(self) -> Message:
         """Read a framed message from the socket."""
         if not self.reader:
-            raise RuntimeError("not connected")
+            raise RuntimeError(ERR_NOT_CONNECTED)
 
         header = await self.reader.read(5)
         if len(header) < 5:
@@ -81,7 +83,7 @@ class IPCClient:
     async def send_request(self, method: str, path: str, **kwargs) -> dict:
         """Send a request and wait for response."""
         if not self.writer:
-            raise RuntimeError("not connected")
+            raise RuntimeError(ERR_NOT_CONNECTED)
 
         correlation_id = kwargs.get("correlation_id", "")
         request = {

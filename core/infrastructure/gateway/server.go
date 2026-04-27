@@ -18,6 +18,7 @@ import (
 )
 
 const defaultMaxBodyBytes = 1 << 20 // 1 MiB
+const headerXRequestID = "X-Request-Id"
 
 // Server is the HTTP gateway supporting HTTP/1.1, HTTP/2 (TLS) and h2c (cleartext).
 type Server struct {
@@ -143,29 +144,53 @@ func (s *Server) Addr() string {
 
 // handle is the single entry-point handler for regular HTTP requests.
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
-	// Detect WebSocket upgrades and hand off to the proxy (#19).
 	if isWebSocketUpgrade(r) {
 		s.wsProxy.ServeHTTP(w, r)
 		return
 	}
 
-	if !s.rateLimiter.AllowIP(r.RemoteAddr) {
-		http.Error(w, "too many requests", http.StatusTooManyRequests)
-		return
-	}
-	token := r.Header.Get("Authorization")
-	if !s.rateLimiter.AllowToken(token) {
-		http.Error(w, "too many requests", http.StatusTooManyRequests)
+	if !s.checkRateLimit(w, r) {
 		return
 	}
 
+	body, err := s.readBody(w, r)
+	if err != nil {
+		return
+	}
+
+	req := s.buildGatewayRequest(r, body)
+	resp, err := s.dispatcher.Dispatch(r.Context(), req)
+	if err != nil {
+		s.handleDispatchError(w, r, err)
+		return
+	}
+
+	s.writeResponse(w, resp)
+}
+
+func (s *Server) checkRateLimit(w http.ResponseWriter, r *http.Request) bool {
+	if !s.rateLimiter.AllowIP(r.RemoteAddr) {
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
+		return false
+	}
+	if !s.rateLimiter.AllowToken(r.Header.Get("Authorization")) {
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
+		return false
+	}
+	return true
+}
+
+func (s *Server) readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 	r.Body = http.MaxBytesReader(w, r.Body, s.maxBodyBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "payload too large", http.StatusRequestEntityTooLarge)
-		return
+		return nil, err
 	}
+	return body, nil
+}
 
+func (s *Server) buildGatewayRequest(r *http.Request, body []byte) *dgw.GatewayRequest {
 	headers := make(map[string]string, len(r.Header))
 	for k, vs := range r.Header {
 		if len(vs) > 0 {
@@ -180,25 +205,23 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	req := &dgw.GatewayRequest{
+	return &dgw.GatewayRequest{
 		Method:  r.Method,
 		Path:    r.URL.Path,
 		Headers: headers,
 		Query:   queryParams,
 		Body:    body,
 	}
+}
 
-	resp, err := s.dispatcher.Dispatch(r.Context(), req)
-	if err != nil {
-		// Even on error paths, echo the request-scoped correlation ID (#52).
-		correlationID := r.Header.Get("X-Request-Id")
-		if correlationID != "" {
-			w.Header().Set("X-Request-Id", correlationID)
-		}
-		s.writeError(w, err)
-		return
+func (s *Server) handleDispatchError(w http.ResponseWriter, r *http.Request, err error) {
+	if corrID := r.Header.Get(headerXRequestID); corrID != "" {
+		w.Header().Set(headerXRequestID, corrID)
 	}
+	s.writeError(w, err)
+}
 
+func (s *Server) writeResponse(w http.ResponseWriter, resp *dgw.GatewayResponse) {
 	for k, v := range apgw.SecurityHeaders() {
 		w.Header().Set(k, v)
 	}
@@ -206,9 +229,8 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(k, v)
 	}
 	w.Header().Set("Content-Type", "application/json")
-	// Always echo the correlation ID as X-Request-Id (#52).
 	if resp.CorrelationID != "" {
-		w.Header().Set("X-Request-Id", resp.CorrelationID)
+		w.Header().Set(headerXRequestID, resp.CorrelationID)
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(resp.Body)

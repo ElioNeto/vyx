@@ -105,16 +105,8 @@ func (m *Manager) pipeLog(writer LogWriter, workerID string, r io.Reader) {
 		n, err := r.Read(buf[lineStart:cap(buf)])
 		if n > 0 {
 			buf = buf[:lineStart+n]
-			for i, b := range buf {
-				if b == '\n' {
-					line := string(buf[:i])
-					buf = buf[i+1:]
-					if line != "" {
-						writer(workerID, line)
-					}
-				}
-			}
-			lineStart = 0
+			lineStart = m.processBufferChunk(writer, workerID, buf)
+			buf = buf[:lineStart]
 		}
 		if err != nil {
 			if len(buf) > 0 {
@@ -126,6 +118,20 @@ func (m *Manager) pipeLog(writer LogWriter, workerID string, r io.Reader) {
 			return
 		}
 	}
+}
+
+func (m *Manager) processBufferChunk(writer LogWriter, workerID string, buf []byte) int {
+	lineStart := 0
+	for i, b := range buf {
+		if b == '\n' {
+			line := string(buf[:i])
+			if line != "" {
+				writer(workerID, line)
+			}
+			lineStart = i + 1
+		}
+	}
+	return lineStart
 }
 
 // Stop sends a termination signal to the worker process and waits for it to exit.

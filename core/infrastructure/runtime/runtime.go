@@ -274,12 +274,7 @@ func getOSAndArch() (string, string) {
 func downloadFNM(ctx context.Context, targetDir string) error {
 	osName, arch := getOSAndArch()
 
-	var filename string
-	if osName == "windows" {
-		filename = fmt.Sprintf("fnm-%s-%s.zip", osName, arch)
-	} else {
-		filename = fmt.Sprintf("fnm-%s-%s.zip", osName, arch)
-	}
+	filename := fmt.Sprintf("fnm-%s-%s.zip", osName, arch)
 
 	url := fmt.Sprintf("%s/%s", fnmDownloadBaseURL, filename)
 
@@ -334,7 +329,7 @@ func downloadZip(ctx context.Context, url, targetDir, binaryName string) error {
 		}
 	}
 
-	return os.Chmod(binaryPath, 0755)
+	return os.Chmod(binaryPath, 0750)
 }
 
 func downloadFile(ctx context.Context, url, targetPath string) error {

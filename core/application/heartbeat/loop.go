@@ -100,22 +100,6 @@ func New(
 
 // Run starts the heartbeat read loop. It blocks until ctx is cancelled or the
 // transport returns an unrecoverable error (e.g., worker disconnected).
-//
-// Design: instead of a ticker, we use a deadline-per-read approach:
-//   - Set a read deadline of (now + interval) on each iteration.
-//   - If the read times out → the worker missed its heartbeat window.
-//   - If we receive TypeHeartbeat → call RecordHeartbeat and reset.
-//   - After MissedThreshold timeouts → call MarkUnhealthy.
-//
-// Grace period: during ConnectGrace after startTime, errors of type
-// "ipc: worker is not connected" do NOT count as missed heartbeats; the loop
-// sleeps RetryInterval and retries. This prevents premature unhealthy marking
-// while the worker process is still dialing the IPC socket.
-//
-// Handshake race: the loop may receive a TypeHandshake frame if the worker
-// connects after StartLoop has already been called. In that case we treat the
-// handshake as a successful connection event: reset missed, call MarkRunning,
-// and continue reading normally.
 func (l *Loop) Run(ctx context.Context) {
 	missed := 0
 	startTime := time.Now()
@@ -125,98 +109,99 @@ func (l *Loop) Run(ctx context.Context) {
 			return
 		}
 
-		// Create a child context with the heartbeat read deadline.
-		// Use ReadTimeout (> Interval) so the sender→worker→loop round-trip
-		// completes before the deadline fires.
-		readTimeout := l.cfg.ReadTimeout
-		if readTimeout == 0 {
-			readTimeout = l.cfg.Interval * 2
-		}
-		readCtx, cancel := context.WithTimeout(ctx, readTimeout)
-		msg, err := l.transport.Receive(readCtx, l.workerID)
-		cancel()
-
+		msg, err := l.receiveWithTimeout(ctx, startTime)
 		if err != nil {
-			if ctx.Err() != nil {
-				// Parent cancelled — clean exit.
-				return
-			}
-
-			// During the connect grace window, "not connected" errors are expected.
-			// Sleep briefly and retry without counting as a missed heartbeat.
-			if isNotConnectedError(err) && time.Since(startTime) < l.cfg.ConnectGrace {
-				l.log.Debug("worker not yet connected, waiting for IPC handshake",
-					zap.String("worker_id", l.workerID),
-					zap.Duration("elapsed", time.Since(startTime)),
-					zap.Duration("grace", l.cfg.ConnectGrace),
-				)
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(l.cfg.RetryInterval):
-				}
-				continue
-			}
-
-			// Treat any other receive error as a missed heartbeat.
-			missed++
-			l.log.Warn("worker heartbeat missed",
-				zap.String("worker_id", l.workerID),
-				zap.Int("missed", missed),
-				zap.Error(err),
-			)
-
-			if missed >= l.cfg.MissedThreshold {
-				l.log.Error("worker exceeded missed heartbeat threshold, marking unhealthy",
-					zap.String("worker_id", l.workerID),
-					zap.Int("threshold", l.cfg.MissedThreshold),
-				)
-				_ = l.service.MarkUnhealthy(ctx, l.workerID)
+			missed = l.handleReceiveError(ctx, missed, startTime, err)
+			if missed < 0 {
 				return
 			}
 			continue
 		}
 
-		switch msg.Type {
-		case ipc.TypeHandshake:
-			// The worker connected after StartLoop was already running.
-			// Treat the handshake as a successful connection: reset missed
-			// counter and confirm the worker is running.
-			missed = 0
-			l.log.Info("handshake received on heartbeat loop — worker connected",
-				zap.String("worker_id", l.workerID),
-			)
-			_ = l.service.MarkRunning(ctx, l.workerID)
+		missed = 0
+		l.handleMessage(ctx, msg)
+	}
+}
 
-		case ipc.TypeHeartbeat:
-			missed = 0
-			if err := l.service.RecordHeartbeat(ctx, l.workerID); err != nil {
-				if err == worker.ErrNotFound {
-					// Worker was deregistered; stop the loop.
-					return
-				}
-				l.log.Error("RecordHeartbeat failed",
-					zap.String("worker_id", l.workerID),
-					zap.Error(err),
-				)
+func (l *Loop) receiveWithTimeout(ctx context.Context, startTime time.Time) (*ipc.Message, error) {
+	readTimeout := l.cfg.ReadTimeout
+	if readTimeout == 0 {
+		readTimeout = l.cfg.Interval * 2
+	}
+	readCtx, cancel := context.WithTimeout(ctx, readTimeout)
+	defer cancel()
+	return l.transport.Receive(readCtx, l.workerID)
+}
+
+func (l *Loop) handleReceiveError(ctx context.Context, missed int, startTime time.Time, err error) int {
+	if ctx.Err() != nil {
+		return -1
+	}
+
+	if isNotConnectedError(err) && time.Since(startTime) < l.cfg.ConnectGrace {
+		l.log.Debug("worker not yet connected, waiting for IPC handshake",
+			zap.String("worker_id", l.workerID),
+			zap.Duration("elapsed", time.Since(startTime)),
+			zap.Duration("grace", l.cfg.ConnectGrace),
+		)
+		select {
+		case <-ctx.Done():
+			return -1
+		case <-time.After(l.cfg.RetryInterval):
+		}
+		return missed
+	}
+
+	missed++
+	l.log.Warn("worker heartbeat missed",
+		zap.String("worker_id", l.workerID),
+		zap.Int("missed", missed),
+		zap.Error(err),
+	)
+
+	if missed >= l.cfg.MissedThreshold {
+		l.log.Error("worker exceeded missed heartbeat threshold, marking unhealthy",
+			zap.String("worker_id", l.workerID),
+			zap.Int("threshold", l.cfg.MissedThreshold),
+		)
+		_ = l.service.MarkUnhealthy(ctx, l.workerID)
+		return -1
+	}
+	return missed
+}
+
+func (l *Loop) handleMessage(ctx context.Context, msg *ipc.Message) {
+	switch msg.Type {
+	case ipc.TypeHandshake:
+		l.log.Info("handshake received on heartbeat loop — worker connected",
+			zap.String("worker_id", l.workerID),
+		)
+		_ = l.service.MarkRunning(ctx, l.workerID)
+
+	case ipc.TypeHeartbeat:
+		if err := l.service.RecordHeartbeat(ctx, l.workerID); err != nil {
+			if err == worker.ErrNotFound {
+				return
 			}
-			l.log.Debug("heartbeat received",
+			l.log.Error("RecordHeartbeat failed",
 				zap.String("worker_id", l.workerID),
-			)
-
-		case ipc.TypeResponse, ipc.TypeError:
-			// Responses are handled by the request dispatcher (issue #4).
-			// Log unexpected frames here so they are not silently dropped.
-			l.log.Debug("non-heartbeat frame received on heartbeat loop",
-				zap.String("worker_id", l.workerID),
-				zap.String("type", msg.Type.String()),
-			)
-
-		default:
-			l.log.Warn("unexpected message type on heartbeat loop",
-				zap.String("worker_id", l.workerID),
-				zap.String("type", msg.Type.String()),
+				zap.Error(err),
 			)
 		}
+		l.log.Debug("heartbeat received",
+			zap.String("worker_id", l.workerID),
+		)
+
+	case ipc.TypeResponse, ipc.TypeError:
+		l.log.Debug("non-heartbeat frame received on heartbeat loop",
+			zap.String("worker_id", l.workerID),
+			zap.String("type", msg.Type.String()),
+		)
+
+	default:
+		l.log.Warn("unexpected message type on heartbeat loop",
+			zap.String("worker_id", l.workerID),
+			zap.String("type", msg.Type.String()),
+		)
 	}
 }

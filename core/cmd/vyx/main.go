@@ -47,6 +47,7 @@ import (
 )
 
 const defaultConfigPath = "vyx.yaml"
+const defaultRouteMapPath = "./route_map.json"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -165,7 +166,7 @@ func cmdBuild() {
 
 	output := cfg.Build.RouteMapOutput
 	if output == "" {
-		output = "./route_map.json"
+		output = defaultRouteMapPath
 	}
 
 	if err := runAnnotateCmd(goDir, tsDir, output); err != nil {
@@ -186,7 +187,7 @@ func cmdAnnotate() {
 
 	output := cfg.Build.RouteMapOutput
 	if output == "" {
-		output = "./route_map.json"
+		output = defaultRouteMapPath
 	}
 
 	if err := runAnnotateCmd("", tsDir, output); err != nil {
@@ -544,7 +545,7 @@ func runServer(devMode bool, withTUI bool) {
 	// --- Load route_map.json ---
 	routeMapPath := cfg.Build.RouteMapOutput
 	if routeMapPath == "" {
-		routeMapPath = "./route_map.json"
+		routeMapPath = defaultRouteMapPath
 	}
 	// Resolve relative route_map path against the config file's directory
 	// so that `VYX_CONFIG=/abs/path/vyx.yaml` finds the route_map next to it.
