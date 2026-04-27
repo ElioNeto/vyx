@@ -1,3 +1,5 @@
 *.exe
-vyx
+/vyx
 node_modules
+__pycache__/
+*.egg-info/
