@@ -1,6 +1,6 @@
 module github.com/ElioNeto/vyx/core
 
-go 1.24.0
+go 1.25.0
 
 require (
 	github.com/charmbracelet/bubbletea v1.3.10
@@ -11,8 +11,8 @@ require (
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	github.com/vmihailenco/msgpack/v5 v5.4.1
 	go.uber.org/zap v1.27.0
-	golang.org/x/net v0.22.0
-	golang.org/x/sys v0.36.0
+	golang.org/x/net v0.53.0
+	golang.org/x/sys v0.43.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -34,5 +34,5 @@ require (
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	go.uber.org/multierr v1.10.0 // indirect
-	golang.org/x/text v0.14.0 // indirect
+	golang.org/x/text v0.36.0 // indirect
 )
