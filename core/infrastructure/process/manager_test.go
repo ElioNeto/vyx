@@ -95,3 +95,13 @@ func TestSendHeartbeat_NoOp(t *testing.T) {
 		t.Errorf("expected nil from SendHeartbeat, got: %v", err)
 	}
 }
+
+func TestSpawn_PythonWorker(t *testing.T) {
+	mgr := process.New()
+	w := workerWith("py-worker", "python3", []string{"--version"})
+
+	if err := mgr.Spawn(context.Background(), w); err != nil {
+		t.Fatalf("expected spawn to succeed, got: %v", err)
+	}
+	_ = mgr.Stop(context.Background(), "py-worker")
+}

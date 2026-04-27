@@ -18,9 +18,10 @@ type RouteMap struct {
 //
 //	goDir       — directory containing Go source files with @Route annotations (may be empty)
 //	tsDir       — directory containing TypeScript/JS backend files (may be empty)
+//	pyDir       — directory containing Python backend files with @Route annotations (may be empty)
 //	frontendDir — directory containing React TSX files with @Page/@Auth annotations (#16)
 //	outputPath  — file path where route_map.json will be written
-func Generate(goDir, tsDir, frontendDir, outputPath string) ([]AnnotationError, error) {
+func Generate(goDir, tsDir, pyDir, frontendDir, outputPath string) ([]AnnotationError, error) {
 	var allRoutes []Route
 	var allErrs []AnnotationError
 
@@ -32,6 +33,12 @@ func Generate(goDir, tsDir, frontendDir, outputPath string) ([]AnnotationError, 
 
 	if tsDir != "" {
 		routes, errs := ParseTSFiles(tsDir, "node:"+filepath.Base(tsDir))
+		allRoutes = append(allRoutes, routes...)
+		allErrs = append(allErrs, errs...)
+	}
+
+	if pyDir != "" {
+		routes, errs := ParsePyFiles(pyDir, "python:"+filepath.Base(pyDir))
 		allRoutes = append(allRoutes, routes...)
 		allErrs = append(allErrs, errs...)
 	}

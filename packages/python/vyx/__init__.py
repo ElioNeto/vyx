@@ -9,6 +9,10 @@ from .dispatch import (
     IPCPayload,
     WorkerResponse,
 )
+from . import ipc
+from . import validate
+
+__version__ = "0.1.0"
 
 __all__ = [
     "get_correlation_id",
@@ -18,6 +22,6 @@ __all__ = [
     "Dispatcher",
     "IPCPayload",
     "WorkerResponse",
+    "ipc",
+    "validate",
 ]
-
-__version__ = "0.1.0"

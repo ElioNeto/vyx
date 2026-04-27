@@ -14,12 +14,16 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
-dependencies = []
+dependencies = [
+    "msgpack>=1.0.0",
+]
 
 [project.optional-dependencies]
+pydantic = ["pydantic>=2.0.0"]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
+    "pydantic>=2.0.0",
 ]
 
 [tool.setuptools]
