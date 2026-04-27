@@ -75,8 +75,7 @@ jobs:
 
       - name: Run Python SDK tests
         working-directory: packages/python
-        run: |
-          PYTHONPATH=src python -m pytest tests/ -v
+        run: python -m pytest tests/ -v
 
   node-sdk-test:
     runs-on: ubuntu-latest
