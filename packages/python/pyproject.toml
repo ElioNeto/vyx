@@ -22,12 +22,12 @@ dev = [
     "pytest-asyncio>=0.21.0",
 ]
 
-[tool.setuptools]
-packages = ["vyx"]
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
-pythonpath = ["."]
+pythonpath = ["src"]
