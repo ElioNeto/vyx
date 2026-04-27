@@ -72,10 +72,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pytest pytest-asyncio
+          pip install -e .
 
       - name: Run Python SDK tests
         working-directory: packages/python
-        run: python -m pytest tests/ -v
+        run: |
+          export PYTHONPATH=$PYTHONPATH:.
+          python -m pytest tests/ -v
 
   node-sdk-test:
     runs-on: ubuntu-latest
