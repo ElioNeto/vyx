@@ -63,12 +63,21 @@ func TestEnsure_Node_DownloadsMockFNM(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var buf bytes.Buffer
 		zw := zip.NewWriter(&buf)
-		fw, _ := zw.Create("fnm")
-		fw.Write([]byte("#!/bin/sh\necho fake fnm\n"))
-		zw.Close()
+		fw, err := zw.Create("fnm")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fw.Write([]byte("#!/bin/sh\necho fake fnm\n")); err != nil {
+			t.Fatal(err)
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatal(err)
+		}
 		w.Header().Set("Content-Type", "application/zip")
 		w.WriteHeader(http.StatusOK)
-		w.Write(buf.Bytes())
+		if _, err := w.Write(buf.Bytes()); err != nil {
+			t.Fatal(err)
+		}
 	}))
 	defer ts.Close()
 
@@ -113,7 +122,9 @@ func TestEnsure_Python_DownloadsMockUV(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("#!/bin/sh\necho fake uv\n"))
+		if _, err := w.Write([]byte("#!/bin/sh\necho fake uv\n")); err != nil {
+			t.Fatal(err)
+		}
 	}))
 	defer ts.Close()
 

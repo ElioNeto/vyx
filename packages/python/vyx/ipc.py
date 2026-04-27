@@ -1,8 +1,7 @@
 import asyncio
-import json
 import os
 import struct
-from typing import Any, Optional
+from typing import Any
 
 import msgpack
 
@@ -24,10 +23,10 @@ class Message:
 class IPCClient:
     """Client for communicating with core via UDS using binary framing."""
 
-    def __init__(self, socket_path: Optional[str] = None):
+    def __init__(self, socket_path: str | None = None):
         self.socket_path = socket_path or os.environ.get("VYX_SOCKET")
-        self.reader: Optional[asyncio.StreamReader] = None
-        self.writer: Optional[asyncio.StreamWriter] = None
+        self.reader: asyncio.StreamReader | None = None
+        self.writer: asyncio.StreamWriter | None = None
         self.worker_id: str = ""
         self.correlation_id: str = ""
 
@@ -176,7 +175,7 @@ async def start_worker(handlers: dict):
                 await client.send_response(200, result, request.get("correlation_id", ""))
             except Exception as e:
                 await client.send_error(500, str(e))
-        except Exception as e:
+        except Exception:
             break
 
     await client.close()

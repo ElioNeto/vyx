@@ -1,11 +1,9 @@
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional
 
 from .context import (
-    get_correlation_id,
-    set_correlation_id,
     reset_correlation_id,
-    clear_correlation_id,
+    set_correlation_id,
 )
 
 
@@ -18,8 +16,8 @@ class IPCPayload:
     headers: dict
     query: dict
     params: dict
-    body: Any
-    claims: Any
+    body: any
+    claims: any
     correlation_id: str
 
     def __init__(self, data: dict):
@@ -33,7 +31,7 @@ class IPCPayload:
         self.correlation_id = data.get('correlation_id', '')
 
 
-WorkerResponse = dict  # {"status_code": int, "headers": dict, "body": Any, "correlation_id": str}
+WorkerResponse = dict
 
 
 class Dispatcher:
@@ -41,8 +39,8 @@ class Dispatcher:
 
     def __init__(self, worker_id: str):
         self.worker_id = worker_id
-        self.routes: Dict[tuple, Callable] = {}
-        self.async_routes: Dict[tuple, Callable] = {}
+        self.routes: dict[tuple, Callable] = {}
+        self.async_routes: dict[tuple, Callable] = {}
 
     def add_route(self, method: str, path: str, handler: Callable) -> None:
         """Register a synchronous route handler."""
@@ -52,7 +50,7 @@ class Dispatcher:
         """Register an asynchronous route handler."""
         self.async_routes[(method, path)] = handler
 
-    def _match_route(self, method: str, path: str) -> Optional[Callable]:
+    def _match_route(self, method: str, path: str) -> Callable | None:
         """Match a route handler."""
         if (method, path) in self.routes:
             return self.routes[(method, path)]
