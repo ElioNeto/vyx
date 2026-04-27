@@ -15,7 +15,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.25'
 
       - uses: actions/cache@v5
         with:
@@ -105,7 +105,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.25'
 
       - name: Test scanner
         run: cd scanner && go test -v ./...
@@ -140,12 +140,12 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.25'
 
       - name: govulncheck
         uses: golang/govulncheck-action@v1
         with:
-          go-version-input: '1.24'
+          go-version-input: '1.25'
           go-package: ./...
           work-directory: core
 
