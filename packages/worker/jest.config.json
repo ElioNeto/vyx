@@ -9,8 +9,7 @@
     "^.+\\.ts$": [
       "ts-jest",
       {
-        "useESM": true,
-        "tsconfig": "./tests/tsconfig.json"
+        "useESM": true
       }
     ]
   },

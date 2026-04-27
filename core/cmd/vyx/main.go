@@ -226,13 +226,14 @@ func runAnnotateCmd(goDir, tsDir, output string) error {
 
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
-		if strings.Contains(err.Error(), "no required module") ||
+		isNotFound := strings.Contains(err.Error(), "no required module") ||
 			(func() bool {
 				if ok := errors.As(err, &exitErr); ok {
 					return exitErr.ExitCode() == 127
 				}
 				return false
-			}()) {
+			})()
+		if isNotFound {
 			return fmt.Errorf("scanner binary not found — run `go install github.com/ElioNeto/vyx/cmd/annotate@latest`: %w", err)
 		}
 		return err
@@ -343,9 +344,19 @@ func hotReloadWatcher(
 	}
 	defer func() { _ = watcher.Close() }()
 
-	// Build the dir → workerIDs index and register watches.
+	entries, absCfgPath := initWatcherEntries(watcher, cfgPath, workers, log)
+
+	startWatcherLoop(ctx, watcher, absCfgPath, entries, service, log, debounce)
+}
+
+func initWatcherEntries(
+	watcher *fsnotify.Watcher,
+	cfgPath string,
+	workers []doamincfg.WorkerConfig,
+	log *zap.Logger,
+) ([]workerWatchEntry, string) {
 	entries := make([]workerWatchEntry, 0, len(workers))
-	seenDirs := map[string]int{} // absDir → index in entries slice
+	seenDirs := map[string]int{}
 
 	for _, wcfg := range workers {
 		watchDir := wcfg.WorkingDir
@@ -370,7 +381,6 @@ func hotReloadWatcher(
 			replicas = 1
 		}
 
-		// Collect all replica IDs for this config entry.
 		var ids []string
 		for i := 0; i < replicas; i++ {
 			wid := wcfg.ID
@@ -381,7 +391,6 @@ func hotReloadWatcher(
 		}
 
 		if idx, ok := seenDirs[abs]; ok {
-			// Multiple workers sharing the same dir — merge IDs.
 			entries[idx].workerIDs = append(entries[idx].workerIDs, ids...)
 		} else {
 			seenDirs[abs] = len(entries)
@@ -397,7 +406,6 @@ func hotReloadWatcher(
 		}
 	}
 
-	// Also watch vyx.yaml so config changes trigger SIGHUP.
 	absCfgPath, _ := filepath.Abs(cfgPath)
 	if err := watcher.Add(filepath.Dir(absCfgPath)); err != nil {
 		log.Warn("hot reload: could not watch config dir",
@@ -406,20 +414,62 @@ func hotReloadWatcher(
 		)
 	}
 
-	// Per-worker debounce timers: workerID → pending timer.
-	type pending struct {
-		timer  *time.Timer
-		cancel chan struct{}
-	}
-	var mu sync.Mutex
-	timers := map[string]*pending{}
+	return entries, absCfgPath
+}
 
-	scheduleRestart := func(workerID string) {
+type pendingTimer struct {
+	timer  *time.Timer
+	cancel chan struct{}
+}
+
+func startWatcherLoop(
+	ctx context.Context,
+	watcher *fsnotify.Watcher,
+	absCfgPath string,
+	entries []workerWatchEntry,
+	service *lifecycle.Service,
+	log *zap.Logger,
+	debounce time.Duration,
+) {
+	var mu sync.Mutex
+	timers := map[string]*pendingTimer{}
+
+	scheduleRestart := buildScheduleRestart(ctx, service, log, debounce, &mu, timers)
+
+	for {
+		select {
+		case <-ctx.Done():
+			cancelAllTimers(&mu, timers)
+			return
+
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			handleWatcherEvent(event, absCfgPath, entries, log, scheduleRestart)
+
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			log.Error("hot reload: watcher error", zap.Error(err))
+		}
+	}
+}
+
+func buildScheduleRestart(
+	ctx context.Context,
+	service *lifecycle.Service,
+	log *zap.Logger,
+	debounce time.Duration,
+	mu *sync.Mutex,
+	timers map[string]*pendingTimer,
+) func(string) {
+	return func(workerID string) {
 		mu.Lock()
 		defer mu.Unlock()
 
 		if p, ok := timers[workerID]; ok {
-			// Reset the debounce window.
 			p.timer.Reset(debounce)
 			return
 		}
@@ -450,65 +500,56 @@ func hotReloadWatcher(
 				)
 			}
 		})
-		timers[workerID] = &pending{timer: t, cancel: cancelCh}
+		timers[workerID] = &pendingTimer{timer: t, cancel: cancelCh}
+	}
+}
+
+func handleWatcherEvent(
+	event fsnotify.Event,
+	absCfgPath string,
+	entries []workerWatchEntry,
+	log *zap.Logger,
+	scheduleRestart func(string),
+) {
+	if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) == 0 {
+		return
 	}
 
-	for {
-		select {
-		case <-ctx.Done():
-			// Cancel all pending timers on shutdown.
-			mu.Lock()
-			for _, p := range timers {
-				p.timer.Stop()
-				close(p.cancel)
-			}
-			mu.Unlock()
-			return
+	absEvt, _ := filepath.Abs(event.Name)
 
-		case event, ok := <-watcher.Events:
-			if !ok {
-				return
-			}
-			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) == 0 {
-				continue
-			}
-
-			absEvt, _ := filepath.Abs(event.Name)
-
-			// vyx.yaml changed → send SIGHUP to self so cfgLoader picks it up.
-			if absEvt == absCfgPath {
-				log.Info("🔄 hot reload: vyx.yaml changed — reloading config (SIGHUP)")
-				if p, err := os.FindProcess(os.Getpid()); err == nil {
-					_ = p.Signal(syscall.SIGHUP)
-				}
-				continue
-			}
-
-			if !isSourceFile(event.Name) {
-				continue
-			}
-
-			// Find which entry owns this file.
-			for _, entry := range entries {
-				if strings.HasPrefix(absEvt, entry.absDir+string(filepath.Separator)) ||
-					absEvt == entry.absDir {
-					for _, wid := range entry.workerIDs {
-						log.Debug("hot reload: source change detected",
-							zap.String("file", event.Name),
-							zap.String("worker_id", wid),
-						)
-						scheduleRestart(wid)
-					}
-					break
-				}
-			}
-
-		case err, ok := <-watcher.Errors:
-			if !ok {
-				return
-			}
-			log.Error("hot reload: watcher error", zap.Error(err))
+	if absEvt == absCfgPath {
+		log.Info("🔄 hot reload: vyx.yaml changed — reloading config (SIGHUP)")
+		if p, err := os.FindProcess(os.Getpid()); err == nil {
+			_ = p.Signal(syscall.SIGHUP)
 		}
+		return
+	}
+
+	if !isSourceFile(event.Name) {
+		return
+	}
+
+	for _, entry := range entries {
+		if strings.HasPrefix(absEvt, entry.absDir+string(filepath.Separator)) ||
+			absEvt == entry.absDir {
+			for _, wid := range entry.workerIDs {
+				log.Debug("hot reload: source change detected",
+					zap.String("file", event.Name),
+					zap.String("worker_id", wid),
+				)
+				scheduleRestart(wid)
+			}
+			break
+		}
+	}
+}
+
+func cancelAllTimers(mu *sync.Mutex, timers map[string]*pendingTimer) {
+	mu.Lock()
+	defer mu.Unlock()
+	for _, p := range timers {
+		p.timer.Stop()
+		close(p.cancel)
 	}
 }
 

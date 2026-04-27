@@ -259,13 +259,9 @@ func (t *NamedPipeTransport) Receive(_ context.Context, workerID string) (ipc.Me
 }
 
 // ReceiveResponse reads one framed message from the Named Pipe connection of workerID.
-// On Windows Named Pipes there is no demux yet — behaves identically to Receive.
-func (t *NamedPipeTransport) ReceiveResponse(_ context.Context, workerID string) (ipc.Message, error) {
-	c, err := t.getConn(workerID)
-	if err != nil {
-		return ipc.Message{}, err
-	}
-	return framing.Read(c.Conn)
+// On Windows Named Pipes there is no demux yet — delegates to Receive for implementation.
+func (t *NamedPipeTransport) ReceiveResponse(ctx context.Context, workerID string) (ipc.Message, error) {
+	return t.Receive(ctx, workerID)
 }
 
 // Deregister closes and removes the Named Pipe for workerID.

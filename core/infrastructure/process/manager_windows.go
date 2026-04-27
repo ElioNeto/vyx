@@ -34,8 +34,5 @@ func stopProcess(cmd *exec.Cmd) error {
 }
 
 func killProcess(cmd *exec.Cmd) error {
-	if err := cmd.Process.Kill(); err != nil && !isKillError(err) {
-		return err
-	}
-	return nil
+	return stopProcess(cmd)
 }
