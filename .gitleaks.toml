@@ -1,0 +1,13 @@
+title = "vyx gitleaks config"
+
+[allowlist]
+  description = "Global allowlist"
+  paths = [
+    '''go\.sum''',
+    '''package-lock\.json''',
+    '''.*_test\.go''',
+    '''tests/.*\.py''',
+  ]
+  regexes = [
+    '''AAAA[0-9A-Za-z+/]{27}''',  # placeholder RSA keys in tests
+  ]
