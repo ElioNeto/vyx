@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.24'
 
@@ -109,7 +109,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.24'
 
@@ -146,14 +146,15 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.25'
 
       - name: govulncheck
-        uses: golang/govulncheck-action@v1
-        with:
-          go-version-input: '1.24'
-          go-package: ./...
-          work-directory: core
+        run: |
+          cd core
+          GOWORK=off go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+        env:
+          GOTOOLCHAIN: auto
 
   security-python:
     name: Security — Python (pip-audit)
