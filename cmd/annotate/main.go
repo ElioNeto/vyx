@@ -14,13 +14,14 @@ import (
 func main() {
 	goDir := flag.String("go", "backend/go", "Directory containing Go source files")
 	tsDir := flag.String("ts", "backend/node", "Directory containing TypeScript source files")
+	pyDir := flag.String("py", "backend/python", "Directory containing Python source files")
 	frontendDir := flag.String("frontend", "frontend/src", "Directory containing React/TSX frontend files")
 	output := flag.String("output", "route_map.json", "Output path for the generated route map")
 	flag.Parse()
 
 	fmt.Println("vyx annotate: scanning for route annotations...")
 
-	errs, err := scanner.Generate(*goDir, *tsDir, *frontendDir, *output)
+	errs, err := scanner.Generate(*goDir, *tsDir, *pyDir, *frontendDir, *output)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fatal: %v\n", err)
 		os.Exit(1)
