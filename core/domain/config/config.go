@@ -37,16 +37,24 @@ type WorkerConfig struct {
 
 // SecurityConfig holds JWT, rate-limiting and payload settings.
 type SecurityConfig struct {
-	JWTSecretEnv   string          `yaml:"jwt_secret_env"`
-	RateLimit      RateLimitConfig `yaml:"rate_limit"`
-	PayloadMaxSize string          `yaml:"payload_max_size"` // e.g. "1mb"
-	GlobalTimeout  time.Duration   `yaml:"global_timeout"`
+	JWTSecretEnv    string              `yaml:"jwt_secret_env"`
+	RateLimit       RateLimitConfig    `yaml:"rate_limit"`
+	CircuitBreaker CircuitBreakerConfig `yaml:"circuit_breaker"`
+	PayloadMaxSize string              `yaml:"payload_max_size"` // e.g. "1mb"
+	GlobalTimeout  time.Duration      `yaml:"global_timeout"`
 }
 
 // RateLimitConfig defines per-IP and per-token request caps.
 type RateLimitConfig struct {
 	PerIP    int `yaml:"per_ip"`
 	PerToken int `yaml:"per_token"`
+}
+
+// CircuitBreakerConfig defines failure thresholds and cooldown.
+type CircuitBreakerConfig struct {
+	Failures   int           `yaml:"failures"`    // consecutive failures before opening
+	Cooldown  time.Duration `yaml:"cooldown"`   // time in open state before half-open
+	HalfOpenMax int         `yaml:"half_open_max"` // max probes in half-open state
 }
 
 // IPCConfig holds Unix Domain Socket and Arrow settings.
@@ -65,13 +73,18 @@ type BuildConfig struct {
 func Defaults() Config {
 	return Config{
 		Project: ProjectConfig{
-			Version: "0.1.0",
+			Version: "0.2.0",
 		},
 		Security: SecurityConfig{
 			JWTSecretEnv: "JWT_SECRET",
 			RateLimit: RateLimitConfig{
 				PerIP:    100,
 				PerToken: 500,
+			},
+			CircuitBreaker: CircuitBreakerConfig{
+				Failures:    5,
+				Cooldown:   30 * time.Second,
+				HalfOpenMax: 3,
 			},
 			PayloadMaxSize: "1mb",
 			GlobalTimeout:  30 * time.Second,
@@ -113,6 +126,16 @@ func (c *Config) Validate() error {
 		if w.ShutdownTimeout < 0 {
 			errs = append(errs, fmt.Errorf("workers[%d].shutdown_timeout must be >= 0 (id: %q)", i, w.ID))
 		}
+	}
+
+	if c.Security.CircuitBreaker.Failures < 0 {
+		errs = append(errs, errors.New("security.circuit_breaker.failures must be >= 0"))
+	}
+	if c.Security.CircuitBreaker.Cooldown < 0 {
+		errs = append(errs, errors.New("security.circuit_breaker.cooldown must be >= 0"))
+	}
+	if c.Security.CircuitBreaker.HalfOpenMax < 0 {
+		errs = append(errs, errors.New("security.circuit_breaker.half_open_max must be >= 0"))
 	}
 
 	if len(errs) == 0 {

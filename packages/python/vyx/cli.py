@@ -11,7 +11,7 @@ import json
 import sys
 from pathlib import Path
 
-from vyx.scanner import scan_directory, scan_file, generate_route_map
+from vyx.scanner import generate_route_map, scan_directory, scan_file
 
 
 def cmd_scan(args) -> int:

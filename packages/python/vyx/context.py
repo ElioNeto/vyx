@@ -1,5 +1,4 @@
 from contextvars import ContextVar, Token
-from typing import Optional
 
 _correlation_id: ContextVar[str] = ContextVar('correlation_id', default='')
 

@@ -5,11 +5,9 @@ Parses # @Route, # @Auth, # @Validate comments above function/class definitions
 and returns a list of RouteEntry objects.
 """
 
-import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 
 @dataclass
@@ -36,8 +34,8 @@ class RouteEntry:
     method: str
     path: str
     worker_id: str
-    auth: Optional[AuthConfig]
-    validate: Optional[ValidateConfig]
+    auth: AuthConfig | None
+    validate: ValidateConfig | None
     source: SourceLocation
 
 
@@ -61,7 +59,6 @@ def scan_file(filepath: str | Path, worker_id: str) -> list[RouteEntry]:
     pending_route = None
     pending_auth = None
     pending_validate = None
-    pending_route_line = 0
 
     for i, line in enumerate(lines):
         stripped = line.strip()
@@ -71,7 +68,6 @@ def scan_file(filepath: str | Path, worker_id: str) -> list[RouteEntry]:
 
             if route_re.match(comment):
                 pending_route = comment
-                pending_route_line = i + 1
             elif auth_re.match(comment):
                 pending_auth = comment
             elif validate_re.match(comment):
@@ -125,14 +121,12 @@ def scan_file(filepath: str | Path, worker_id: str) -> list[RouteEntry]:
             pending_route = None
             pending_auth = None
             pending_validate = None
-            pending_route_line = 0
             continue
 
         if stripped == '':
             pending_route = None
             pending_auth = None
             pending_validate = None
-            pending_route_line = 0
 
     return entries
 

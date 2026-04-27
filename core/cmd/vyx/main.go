@@ -32,6 +32,7 @@ import (
 	"github.com/ElioNeto/vyx/core/application/monitor"
 	doamincfg "github.com/ElioNeto/vyx/core/domain/config"
 	dgw "github.com/ElioNeto/vyx/core/domain/gateway"
+	"github.com/ElioNeto/vyx/core/domain/circuit"
 	"github.com/ElioNeto/vyx/core/domain/ipc"
 	dlog "github.com/ElioNeto/vyx/core/domain/log"
 	infracfg "github.com/ElioNeto/vyx/core/infrastructure/config"
@@ -605,6 +606,11 @@ func runServer(devMode bool, withTUI bool) {
 	schemaValidator := infragw.NewSchemaValidator(cfg.Build.SchemasDir)
 
 	// --- Dispatcher ---
+	circuitConfig := circuit.Config{
+		Failures:    cfg.Security.CircuitBreaker.Failures,
+		Cooldown:    cfg.Security.CircuitBreaker.Cooldown,
+		HalfOpenMax: cfg.Security.CircuitBreaker.HalfOpenMax,
+	}
 	dispatcher := apgw.NewDispatcher(
 		rm,
 		transport,
@@ -613,6 +619,7 @@ func runServer(devMode bool, withTUI bool) {
 		cfg.Security.GlobalTimeout,
 		log,
 		drainer,
+		circuitConfig,
 	)
 
 	// --- Rate limiter ---
