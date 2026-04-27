@@ -77,8 +77,7 @@ func (v *SchemaValidator) Validate(schemaName string, body []byte) error {
 		return err
 	}
 
-	// Decode body into a generic interface{} for validation.
-	var inst interface{}
+	var inst map[string]interface{}
 	if err := json.Unmarshal(body, &inst); err != nil {
 		return fmt.Errorf("schema: unmarshal body: %w", err)
 	}
