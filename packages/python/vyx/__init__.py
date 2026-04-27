@@ -10,7 +10,8 @@ from .dispatch import (
     WorkerResponse,
 )
 from . import ipc
-from . import validate
+from . import scanner
+from . import validate as _validate
 
 __version__ = "0.1.0"
 
@@ -23,5 +24,11 @@ __all__ = [
     "IPCPayload",
     "WorkerResponse",
     "ipc",
-    "validate",
+    "scanner",
 ]
+
+
+def __getattr__(name):
+    if name == "validate":
+        return _validate
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

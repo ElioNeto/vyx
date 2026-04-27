@@ -1,8 +1,7 @@
 from typing import Any, Type
-from pydantic import BaseModel, ValidationError
 
 
-def validate_pydantic(model_cls: Type[BaseModel], data: Any) -> BaseModel:
+def validate_pydantic(model_cls: Type, data: Any):
     """Validate data against a Pydantic model.
     
     Args:
@@ -15,6 +14,8 @@ def validate_pydantic(model_cls: Type[BaseModel], data: Any) -> BaseModel:
     Raises:
         ValidationError: If validation fails
     """
+    from pydantic import BaseModel, ValidationError as PydanticValidationError
+    
     if isinstance(data, dict):
         return model_cls(**data)
     return model_cls.model_validate(data)

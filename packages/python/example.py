@@ -7,14 +7,24 @@ class OrderInput(BaseModel):
     quantity: int
 
 
+# @Route(POST /api/orders)
+# @Validate(pydantic)
+# @Auth(roles: ["user"])
 async def create_order(request: dict) -> dict:
     body = request.get("body", {})
     data = OrderInput(**body)
     return {"order_id": 456, "product": data.product_id, "qty": data.quantity}
 
 
+# @Route(GET /api/orders)
+# @Auth(roles: ["user", "admin"])
 async def list_orders(request: dict) -> dict:
-    return {"orders": []}
+    return []
+
+
+# @Route(GET /api/health)
+def health_check(request: dict) -> dict:
+    return {"status": "ok"}
 
 
 handlers = {

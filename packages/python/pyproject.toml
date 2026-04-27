@@ -29,6 +29,9 @@ dev = [
 [tool.setuptools]
 packages = ["vyx"]
 
+[project.scripts]
+vyx = "vyx.cli:main"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
