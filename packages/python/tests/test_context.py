@@ -72,14 +72,22 @@ async def test_context_preserved_in_nested_async_calls():
 
 @pytest.mark.asyncio
 async def test_context_after_async_task_completes():
-    """Should not leak context after async task completes."""
+    """Should not leak context from a spawned task back to the parent.
+    
+    asyncio.create_task() copies the current context, so mutations
+    inside the task stay isolated — which is how the dispatcher runs
+    each request handler.
+    """
+    clear_correlation_id()
+
     async def task() -> None:
         set_correlation_id('async-leak-test')
         await asyncio.sleep(0.01)
     
-    await task()
+    t = asyncio.create_task(task())
+    await t
     
-    # Context should be cleared after task
+    # Parent context should remain unchanged
     assert get_correlation_id() == ''
 
 
