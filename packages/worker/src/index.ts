@@ -5,15 +5,21 @@ import {
   patch,
   start,
   del,
-  getCorrelationId,
-  requestContext,
-  runInRequestContext,
-  runInRequestContextAsync,
+} from './dispatch.js';
+
+import {
   createResponse,
   json,
   text,
   error,
-} from './index.js';
+} from './request.js';
+
+import {
+  getCorrelationId,
+  requestContext,
+  runInRequestContext,
+  runInRequestContextAsync,
+} from './context.js';
 
 export {
   get,
@@ -22,23 +28,17 @@ export {
   patch,
   start,
   del as delete,
-} from './dispatch.js';
-
-export {
   createResponse,
   json,
   text,
   error,
-} from './request.js';
-
-export {
   getCorrelationId,
   requestContext,
   runInRequestContext,
   runInRequestContextAsync,
-} from './context.js';
-export type { RequestStore } from './context.js';
+};
 
+export type { RequestStore } from './context.js';
 export type { IPCPayload, Claims, WorkerResponse, Request, Response } from './request.js';
 export type { WorkerOptions } from './dispatch.js';
 
