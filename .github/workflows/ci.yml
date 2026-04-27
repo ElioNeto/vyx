@@ -215,14 +215,14 @@ jobs:
           fetch-depth: 0
 
       - name: Download Go coverage
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: go-coverage
           path: core/
         continue-on-error: true
 
       - name: Download Python coverage
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: python-coverage
           path: packages/python/
