@@ -32,18 +32,6 @@ var (
 	ErrInstallFailed    = errors.New("failed to install runtime")
 )
 
-	const (
-	// fnmOwner is the GitHub owner for fnm (Schniz).
-	// Marked as unused but kept for documentation.
-	_fnmOwner = "Schniz"
-	// fnmRepo is the GitHub repository for fnm.
-	_fnmRepo = "fnm"
-	// uvOwner is the GitHub owner for uv (astral-sh).
-	_uvOwner = "astral-sh"
-	// uvRepo is the GitHub repository for uv.
-	_uvRepo = "uv"
-)
-
 var (
 	fnmDownloadBaseURL = "https://github.com/Schniz/fnm/releases/latest/download"
 	uvDownloadBaseURL  = "https://github.com/astral-sh/uv/releases/latest/download"
