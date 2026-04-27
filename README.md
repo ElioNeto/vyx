@@ -1,9 +1,9 @@
 # vyx
 
-> A high-performance polyglot full-stack framework with a Go Core Orchestrator, annotation-based routing, and IPC via Unix Domain Sockets + Apache Arrow.
+> A high-performance polyglot full-stack framework with a Go Core Orchestrator, annotation-based routing, and IPC via Unix Domain Sockets.
 
 ![License](https://img.shields.io/github/license/ElioNeto/vyx)
-![Status](https://img.shields.io/badge/status-v0.1.0--MVP-brightgreen)
+![Status](https://img.shields.io/badge/status-v0.2.0--Python--blue)
 ![Go](https://img.shields.io/badge/core-Go-00ADD8?logo=go)
 ![Node](https://img.shields.io/badge/worker-Node.js-339933?logo=node.js)
 ![Python](https://img.shields.io/badge/worker-Python-3776AB?logo=python)
@@ -116,9 +116,10 @@ export async function getProduct(id: string) { ... }
 **Python backend:**
 ```python
 # @Route(POST /api/orders)
-# @Validate( pydantic )
+# @Validate(pydantic)
 # @Auth(roles: ["user"])
-def create_order(request: Dict) -> Dict: ...
+async def create_order(request: dict) -> dict:
+    return {"order_id": 456}
 ```
 
 **React frontend (SSR):**
@@ -146,7 +147,7 @@ vyx annotate             # validate annotations and display the discovered route
 ```
 project/
 ├── core/               # Go core orchestrator
-├── scanner/            # Annotation scanner (Go, TypeScript, TSX)
+├── scanner/            # Annotation scanner (Go, TypeScript, Python, TSX)
 ├── examples/           # Ready-to-run examples
 │   └── hello-world/    # Go + Node.js workers, JWT auth, JSON Schema validation
 ├── backend/
@@ -166,18 +167,20 @@ project/
 | Phase | Scope | Status |
 |-------|-------|--------|
 | 1 – MVP | Go core, Node + Go workers, UDS/JSON, JWT, basic validation, CLI, WebSocket | ✅ Complete |
-| 2 – Expansion | Python support, Apache Arrow, circuit breakers, worker pools, hot reload | 🔄 In Progress |
-| 3 – Observability | Metrics (Prometheus), tracing (OpenTelemetry), TLS, full CLI, docs | 🗓 Planned |
-| 4 – Scalability | Remote workers (gRPC), Kubernetes operator | 🗓 Planned |
+| 2 – Python | Python worker SDK, annotation scanner, IPC, Pydantic validation | ✅ Complete |
+| 3 – Expansion | Apache Arrow, circuit breakers, worker pools, hot reload | 🗓 Planned |
+| 4 – Observability | Metrics (Prometheus), tracing (OpenTelemetry), TLS, full CLI, docs | 🗓 Planned |
+| 5 – Scalability | Remote workers (gRPC), Kubernetes operator | 🗓 Planned |
 
 ---
 
-## Phase 1 – What’s included in v0.1.0
+## Phase 1 & 2 – What's included in v0.2.0
 
 - ✅ **Go Core Orchestrator** — HTTP/1.1 + HTTP/2 + WebSocket gateway with JWT authentication, JSON Schema validation, and rate limiting
 - ✅ **Worker Lifecycle** — spawn, monitor, restart (exponential backoff), graceful shutdown, handshake & registration protocol
 - ✅ **IPC via Unix Domain Sockets** — binary framing protocol (request, response, heartbeat, error), bidirectional heartbeat (core ↔ worker)
-- ✅ **Annotation Scanner** — static analysis for Go, TypeScript, and TSX files generating `route_map.json`
+- ✅ **Annotation Scanner** — static analysis for Go, TypeScript, Python, and TSX files generating `route_map.json`
+- ✅ **Python Worker SDK** — UDS client, IPC protocol, dispatcher, contextvars, Pydantic validation
 - ✅ **Router** — path parameter support (`:id`), method-based dispatch, authorization enforcement
 - ✅ **CLI** — `vyx new`, `vyx dev`, `vyx build`, `vyx annotate` subcommands wired to the real scanner
 - ✅ **`vyx.yaml` manifest** — schema, config loader, SIGHUP reload
