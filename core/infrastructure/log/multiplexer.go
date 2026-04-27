@@ -75,7 +75,7 @@ func (m *Multiplexer) AddSource(workerID string, r io.Reader) func() {
 
 // AddSourceWithPrefix is like AddSource but prepends a source tag for raw lines.
 func (m *Multiplexer) AddSourceWithPrefix(sourceTag string, r io.Reader) func() {
-	return m.scanSource(sourceTag, r, func(workerID string, line string) log.Entry {
+	return m.scanSource(sourceTag, r, func(_ string, line string) log.Entry {
 		entry := log.ParseEntry("", line)
 		if entry.Source == "" {
 			entry.Source = sourceTag

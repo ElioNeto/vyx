@@ -23,29 +23,29 @@ import (
 	"github.com/ElioNeto/vyx/core/domain/ipc"
 )
 
-// LifecycleService is the subset of lifecycle.Service used by the handshake handler.
-type LifecycleService interface {
+// WorkerManager is the interface for lifecycle operations.
+type WorkerManager interface {
 	MarkRunning(ctx context.Context, workerID string) error
 }
 
-// Transport is the subset of ipc.Transport used here.
-type Transport interface {
+// Receiver is the interface for receiving IPC messages.
+type Receiver interface {
 	Receive(ctx context.Context, workerID string) (ipc.Message, error)
 }
 
 // Handler performs the worker registration handshake for a single worker.
 type Handler struct {
-	transport Transport
+	transport Receiver
 	routes    *dgw.RouteMap
-	service   LifecycleService
-	log       *zap.Logger
+	service  WorkerManager
+	log      *zap.Logger
 }
 
 // NewHandler creates a Handler wired with the required dependencies.
 func NewHandler(
-	transport Transport,
+	transport Receiver,
 	routes *dgw.RouteMap,
-	service LifecycleService,
+	service WorkerManager,
 	log *zap.Logger,
 ) *Handler {
 	return &Handler{

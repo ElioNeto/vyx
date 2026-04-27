@@ -105,28 +105,61 @@ func Defaults() Config {
 func (c *Config) Validate() error {
 	var errs []error
 
-	if c.Project.Name == "" {
-		errs = append(errs, errors.New("project.name is required"))
+	if err := c.validateProject(); err != nil {
+		errs = append(errs, err)
 	}
 
 	for i, w := range c.Workers {
-		if w.ID == "" {
-			errs = append(errs, fmt.Errorf("workers[%d].id is required", i))
-		}
-		if w.Command == "" {
-			errs = append(errs, fmt.Errorf("workers[%d].command is required (id: %q)", i, w.ID))
-		}
-		if w.Replicas < 0 {
-			errs = append(errs, fmt.Errorf("workers[%d].replicas must be >= 0 (id: %q)", i, w.ID))
-		}
-		validStrategies := map[string]bool{"round-robin": true, "least-loaded": true, "": true}
-		if !validStrategies[w.Strategy] {
-			errs = append(errs, fmt.Errorf("workers[%d].strategy %q is invalid; use \"round-robin\" or \"least-loaded\" (id: %q)", i, w.Strategy, w.ID))
-		}
-		if w.ShutdownTimeout < 0 {
-			errs = append(errs, fmt.Errorf("workers[%d].shutdown_timeout must be >= 0 (id: %q)", i, w.ID))
+		if err := c.validateWorker(w, i); err != nil {
+			errs = append(errs, err)
 		}
 	}
+
+	if err := c.validateSecurity(); err != nil {
+		errs = append(errs, err)
+	}
+
+	if len(errs) == 0 {
+		return nil
+	}
+	return errors.Join(errs...)
+}
+
+func (c *Config) validateProject() error {
+	if c.Project.Name == "" {
+		return errors.New("project.name is required")
+	}
+	return nil
+}
+
+func (c *Config) validateWorker(w WorkerConfig, idx int) error {
+	var errs []error
+
+	if w.ID == "" {
+		errs = append(errs, fmt.Errorf("workers[%d].id is required", idx))
+	}
+	if w.Command == "" {
+		errs = append(errs, fmt.Errorf("workers[%d].command is required (id: %q)", idx, w.ID))
+	}
+	if w.Replicas < 0 {
+		errs = append(errs, fmt.Errorf("workers[%d].replicas must be >= 0 (id: %q)", idx, w.ID))
+	}
+	validStrategies := map[string]bool{"round-robin": true, "least-loaded": true, "": true}
+	if !validStrategies[w.Strategy] {
+		errs = append(errs, fmt.Errorf("workers[%d].strategy %q is invalid; use \"round-robin\" or \"least-loaded\" (id: %q)", idx, w.Strategy, w.ID))
+	}
+	if w.ShutdownTimeout < 0 {
+		errs = append(errs, fmt.Errorf("workers[%d].shutdown_timeout must be >= 0 (id: %q)", idx, w.ID))
+	}
+
+	if len(errs) == 0 {
+		return nil
+	}
+	return errors.Join(errs...)
+}
+
+func (c *Config) validateSecurity() error {
+	var errs []error
 
 	if c.Security.CircuitBreaker.Failures < 0 {
 		errs = append(errs, errors.New("security.circuit_breaker.failures must be >= 0"))

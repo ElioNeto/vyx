@@ -101,15 +101,23 @@ func (p *wsProxy) proxy(
 	sessionID := uuid.NewString()
 	workerID := route.WorkerID
 
-	// Build headers snapshot.
-	headers := make(map[string]string)
-	for k, vs := range conn.Request().Header {
-		if len(vs) > 0 {
-			headers[k] = vs[0]
-		}
+	if err := p.notifyWorkerOpen(ctx, sessionID, conn, workerID, claims); err != nil {
+		return
 	}
 
-	// 4. Notify worker: session opened.
+	errCh := make(chan error, 2)
+
+	go p.pumpClientToWorker(ctx, conn, sessionID, workerID, errCh)
+	go p.pumpWorkerToClient(ctx, conn, sessionID, workerID, errCh)
+
+	select {
+	case <-ctx.Done():
+	case <-errCh:
+	}
+}
+
+func (p *wsProxy) notifyWorkerOpen(ctx context.Context, sessionID string, conn *websocket.Conn, workerID string, claims *dgw.Claims) error {
+	headers := p.buildHeadersSnapshot(conn)
 	openPayload, _ := json.Marshal(ipc.WSOpenPayload{
 		SessionID: sessionID,
 		Path:      conn.Request().URL.Path,
@@ -125,7 +133,7 @@ func (p *wsProxy) proxy(
 			zap.String("worker_id", workerID),
 			zap.Error(err),
 		)
-		return
+		return err
 	}
 
 	p.log.Info("ws: session opened",
@@ -133,80 +141,66 @@ func (p *wsProxy) proxy(
 		zap.String("worker_id", workerID),
 		zap.String("path", conn.Request().URL.Path),
 	)
+	return nil
+}
 
-	defer func() {
-		// 7. Notify worker: session closed.
-		closePayload, _ := json.Marshal(ipc.WSClosePayload{
+func (p *wsProxy) buildHeadersSnapshot(conn *websocket.Conn) map[string]string {
+	headers := make(map[string]string)
+	for k, vs := range conn.Request().Header {
+		if len(vs) > 0 {
+			headers[k] = vs[0]
+		}
+	}
+	return headers
+}
+
+func (p *wsProxy) pumpClientToWorker(ctx context.Context, conn *websocket.Conn, sessionID, workerID string, errCh chan<- error) {
+	for {
+		var data []byte
+		if err := websocket.Message.Receive(conn, &data); err != nil {
+			if err != io.EOF {
+				p.log.Debug("ws: client read error",
+					zap.String("session_id", sessionID), zap.Error(err))
+			}
+			errCh <- err
+			return
+		}
+		msgPayload, _ := json.Marshal(ipc.WSMessagePayload{
 			SessionID: sessionID,
-			Code:      1000,
-			Reason:    "normal closure",
+			Data:      data,
+			IsBinary:  false,
 		})
-		_ = p.transport.Send(context.Background(), workerID, ipc.Message{
-			Type:    ipc.TypeWSClose,
-			Payload: closePayload,
-		})
-		p.log.Info("ws: session closed",
-			zap.String("session_id", sessionID),
-		)
-	}()
-
-	// 5. Pump client → worker.
-	errCh := make(chan error, 2)
-
-	go func() {
-		for {
-			var data []byte
-			if err := websocket.Message.Receive(conn, &data); err != nil {
-				if err != io.EOF {
-					p.log.Debug("ws: client read error",
-						zap.String("session_id", sessionID), zap.Error(err))
-				}
-				errCh <- err
-				return
-			}
-			msgPayload, _ := json.Marshal(ipc.WSMessagePayload{
-				SessionID: sessionID,
-				Data:      data,
-				IsBinary:  false,
-			})
-			if err := p.transport.Send(ctx, workerID, ipc.Message{
-				Type:    ipc.TypeWSMessage,
-				Payload: msgPayload,
-			}); err != nil {
-				errCh <- err
-				return
-			}
+		if err := p.transport.Send(ctx, workerID, ipc.Message{
+			Type:    ipc.TypeWSMessage,
+			Payload: msgPayload,
+		}); err != nil {
+			errCh <- err
+			return
 		}
-	}()
+	}
+}
 
-	// 6. Pump worker → client.
-	go func() {
-		for {
-			msg, err := p.transport.ReceiveResponse(ctx, workerID)
-			if err != nil {
-				errCh <- err
-				return
-			}
-			if msg.Type != ipc.TypeWSMessage {
-				continue // skip non-ws frames (heartbeats etc.)
-			}
-			var msgPayload ipc.WSMessagePayload
-			if err := json.Unmarshal(msg.Payload, &msgPayload); err != nil {
-				continue
-			}
-			if msgPayload.SessionID != sessionID {
-				continue // not ours
-			}
-			if err := websocket.Message.Send(conn, msgPayload.Data); err != nil {
-				errCh <- err
-				return
-			}
+func (p *wsProxy) pumpWorkerToClient(ctx context.Context, conn *websocket.Conn, sessionID, workerID string, errCh chan<- error) {
+	for {
+		msg, err := p.transport.ReceiveResponse(ctx, workerID)
+		if err != nil {
+			errCh <- err
+			return
 		}
-	}()
-
-	select {
-	case <-ctx.Done():
-	case <-errCh:
+		if msg.Type != ipc.TypeWSMessage {
+			continue
+		}
+		var msgPayload ipc.WSMessagePayload
+		if err := json.Unmarshal(msg.Payload, &msgPayload); err != nil {
+			continue
+		}
+		if msgPayload.SessionID != sessionID {
+			continue
+		}
+		if err := websocket.Message.Send(conn, msgPayload.Data); err != nil {
+			errCh <- err
+			return
+		}
 	}
 }
 

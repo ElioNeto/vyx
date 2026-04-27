@@ -41,7 +41,20 @@ type Dispatcher struct {
 	circuit   *circuit.Registry
 }
 
+// DispatcherConfig groups the dependencies for NewDispatcher.
+// Use this struct to avoid passing too many parameters.
+type DispatcherConfig struct {
+	Routes    *dgw.RouteMap
+	Transport ipc.Transport
+	JWT       JWTValidator
+	Schema    SchemaValidator
+	Timeout   time.Duration
+	Log       *zap.Logger
+	Drainer   *lifecycle.WorkerDrainer
+}
+
 // NewDispatcher creates a Dispatcher wired with all required dependencies.
+// For cleaner calls, populate a DispatcherConfig struct.
 func NewDispatcher(
 	routes *dgw.RouteMap,
 	transport ipc.Transport,
@@ -53,14 +66,14 @@ func NewDispatcher(
 	opts ...interface{},
 ) *Dispatcher {
 	var circuitConfig circuit.Config
-	var lifecycleOpts []DispatcherOption
+	var dispatcherOpts []DispatcherOption
 
 	for _, opt := range opts {
 		switch o := opt.(type) {
 		case circuit.Config:
 			circuitConfig = o
 		case DispatcherOption:
-			lifecycleOpts = append(lifecycleOpts, o)
+			dispatcherOpts = append(dispatcherOpts, o)
 		}
 	}
 
@@ -84,10 +97,25 @@ func NewDispatcher(
 		hooks:     []RequestLifecycle{NewAccessLogLifecycle(log)},
 		circuit:   circuit.NewRegistry(circuitConfig, onStateChange),
 	}
-	for _, opt := range lifecycleOpts {
+	for _, opt := range dispatcherOpts {
 		opt(d)
 	}
 	return d
+}
+
+// NewDispatcherFromParams is an alias for NewDispatcher using a config struct.
+// Use this when you have many parameters to avoid parameter ordering issues.
+func NewDispatcherFromParams(cfg DispatcherConfig, circuitConfig circuit.Config, opts ...DispatcherOption) *Dispatcher {
+	return NewDispatcher(
+		cfg.Routes,
+		cfg.Transport,
+		cfg.JWT,
+		cfg.Schema,
+		cfg.Timeout,
+		cfg.Log,
+		cfg.Drainer,
+		circuitConfig,
+	)
 }
 
 // DispatcherOption configures a Dispatcher.

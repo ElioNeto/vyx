@@ -70,24 +70,20 @@ func (c *conn) startPump() {
 				select {
 				case c.heartbeatCh <- msg:
 				default:
-					// Drop if consumer is too slow — heartbeat will be
-					// counted as missed, which is the correct behaviour.
 				}
-				case ipc.TypeResponse, ipc.TypeError,
-					ipc.TypeWSOpen, ipc.TypeWSMessage, ipc.TypeWSClose:
-					select {
-					case c.responseCh <- msg:
-					default:
-					}
-				default:
-				// Unknown type — route to response channel as a catch-all.
-				select {
-				case c.responseCh <- msg:
-				default:
-				}
+			case ipc.TypeResponse, ipc.TypeError,
+				ipc.TypeWSOpen, ipc.TypeWSMessage, ipc.TypeWSClose:
+				c.sendToResponse(msg)
 			}
 		}
 	}()
+}
+
+func (c *conn) sendToResponse(msg ipc.Message) {
+	select {
+	case c.responseCh <- msg:
+	default:
+	}
 }
 
 // getPumpErr returns the cached read-pump error (if any).
