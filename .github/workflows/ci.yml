@@ -38,7 +38,7 @@ jobs:
       - name: Lint (golangci-lint)
         uses: golangci/golangci-lint-action@v7
         with:
-          version: v2.11
+          version: v2.11.4
           working-directory: core
 
       - name: Test with coverage

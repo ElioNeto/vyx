@@ -9,19 +9,8 @@ linters:
   default: none
   enable:
     - govet
-    - staticcheck
 
 issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck
-    - text: "Error return value of .* is not checked"
-      linters:
-        - errcheck
-    - text: "const _[a-zA-Z]+ is unused"
-      linters:
-        - unused
-    - text: "QF1003"
-      linters:
-        - staticcheck
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  new: false
