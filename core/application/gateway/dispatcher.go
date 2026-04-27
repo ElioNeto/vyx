@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	dgw "github.com/ElioNeto/vyx/core/domain/gateway"
+	"github.com/ElioNeto/vyx/core/domain/circuit"
 	"github.com/ElioNeto/vyx/core/domain/ipc"
 	"github.com/ElioNeto/vyx/core/application/lifecycle"
 )
@@ -37,6 +38,7 @@ type Dispatcher struct {
 	listeners []ProxyListener
 	drainer   *lifecycle.WorkerDrainer
 	hooks     []RequestLifecycle
+	circuit   *circuit.Registry
 }
 
 // NewDispatcher creates a Dispatcher wired with all required dependencies.
@@ -48,8 +50,29 @@ func NewDispatcher(
 	timeout time.Duration,
 	log *zap.Logger,
 	drainer *lifecycle.WorkerDrainer,
-	opts ...DispatcherOption,
+	opts ...interface{},
 ) *Dispatcher {
+	var circuitConfig circuit.Config
+	var lifecycleOpts []DispatcherOption
+
+	for _, opt := range opts {
+		switch o := opt.(type) {
+		case circuit.Config:
+			circuitConfig = o
+		case DispatcherOption:
+			lifecycleOpts = append(lifecycleOpts, o)
+		}
+	}
+
+	onStateChange := func(sc circuit.StateChange) {
+		log.Info("circuit breaker state change",
+			zap.String("route_id", sc.RouteID),
+			zap.String("from", sc.From.String()),
+			zap.String("to", sc.To.String()),
+			zap.String("reason", sc.Reason),
+			zap.Time("time", sc.Time),
+		)
+	}
 	d := &Dispatcher{
 		routes:    routes,
 		transport: transport,
@@ -59,8 +82,9 @@ func NewDispatcher(
 		log:       log,
 		drainer:   drainer,
 		hooks:     []RequestLifecycle{NewAccessLogLifecycle(log)},
+		circuit:   circuit.NewRegistry(circuitConfig, onStateChange),
 	}
-	for _, opt := range opts {
+	for _, opt := range lifecycleOpts {
 		opt(d)
 	}
 	return d
@@ -135,7 +159,25 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 	lc.Phase = PhaseRouteMatch
 	req.Params = result.Params
 
-	// 1a. OnRouteMatch hooks — allow middleware to short-circuit before auth.
+	// 1a. Check circuit breaker — reject if open.
+	// Use method+path as unique route identifier.
+	routeKey := fmt.Sprintf("%s:%s", req.Method, req.Path)
+	cb := d.circuit.Get(routeKey)
+	if !cb.Allow() {
+		state, _, _ := cb.Stats()
+		statusCode = 503
+		lc.StatusCode = 503
+		lc.Err = fmt.Errorf("circuit breaker open for route %s (state: %s)", routeKey, state)
+		lc.Phase = PhasePreDispatch
+		return &dgw.GatewayResponse{
+			StatusCode:    503,
+			Headers:     map[string]string{"Retry-After": "30"},
+			Body:        []byte(fmt.Sprintf(`{"error":"circuit breaker open","state":"%s"}`, state)),
+			CorrelationID: correlationID,
+		}, nil
+	}
+
+	// 1b. OnRouteMatch hooks — allow middleware to short-circuit before auth.
 	for _, l := range d.listeners {
 		l.OnRouteMatch(lc)
 		if resp, aborted := lc.EarlyResponse(); aborted {
@@ -252,6 +294,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 		for _, hook := range d.hooks {
 			hook.OnWorkerError(ctx, route.WorkerID, req, lc.Err)
 		}
+		cb.RecordFailure()
 		return nil, lc.Err
 	}
 
@@ -267,6 +310,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 			for _, hook := range d.hooks {
 				hook.OnWorkerError(ctx, route.WorkerID, req, lc.Err)
 			}
+			cb.RecordFailure()
 			return nil, dgw.ErrUpstreamTimeout
 		}
 		statusCode = 502
@@ -276,6 +320,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 		for _, hook := range d.hooks {
 			hook.OnWorkerError(ctx, route.WorkerID, req, lc.Err)
 		}
+		cb.RecordFailure()
 		return nil, lc.Err
 	}
 
@@ -286,6 +331,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 		for _, hook := range d.hooks {
 			hook.OnWorkerError(ctx, route.WorkerID, req, lc.Err)
 		}
+		cb.RecordFailure()
 		return &dgw.GatewayResponse{
 			StatusCode:    502,
 			Body:          respMsg.Payload,
@@ -332,6 +378,14 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 	for _, hook := range d.hooks {
 		hook.OnAfterDispatch(ctx, req, resp)
 	}
+
+	// Record circuit breaker result.
+	if workerResp.StatusCode >= 500 {
+		cb.RecordFailure()
+	} else {
+		cb.RecordSuccess()
+	}
+
 	return resp, nil
 }
 
