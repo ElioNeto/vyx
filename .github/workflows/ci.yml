@@ -30,9 +30,9 @@ jobs:
           cd ../../examples/hello-world/workers/go && go build ./...
 
       - name: Lint (golangci-lint)
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@v7
         with:
-          version: v2
+          version: v2.1.6
           working-directory: core
 
       - name: Test with coverage
