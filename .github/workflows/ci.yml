@@ -29,7 +29,7 @@ jobs:
           cd ../cmd/vyx && go build ./...
           cd ../../examples/hello-world/workers/go && go build ./...
 
-- name: Lint (golangci-lint)
+      - name: Lint (golangci-lint)
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.11
