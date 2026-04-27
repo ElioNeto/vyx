@@ -33,10 +33,15 @@ var (
 )
 
 	const (
-	fnmOwner = "Schniz"
-	fnmRepo  = "fnm"
-	uvOwner  = "astral-sh"
-	uvRepo   = "uv"
+	// fnmOwner is the GitHub owner for fnm (Schniz).
+	// Marked as unused but kept for documentation.
+	_fnmOwner = "Schniz"
+	// fnmRepo is the GitHub repository for fnm.
+	_fnmRepo = "fnm"
+	// uvOwner is the GitHub owner for uv (astral-sh).
+	_uvOwner = "astral-sh"
+	// uvRepo is the GitHub repository for uv.
+	_uvRepo = "uv"
 )
 
 var (
@@ -103,11 +108,7 @@ func NeedsProvisioning(command string) bool {
 
 	first := strings.Fields(command)[0]
 
-	if first == "go" {
-		return false
-	}
-
-	return true
+	return first != "go"
 }
 
 func Ensure(ctx context.Context, rt Runtime, version, vyxDir string, logger func(string)) error {
@@ -314,7 +315,6 @@ func downloadUV(ctx context.Context, targetDir string) error {
 	uvPath := filepath.Join(targetDir, "uv")
 	if osName == "windows" {
 		uvPath += ".exe"
-		filename += ".exe"
 	}
 
 	return downloadFile(ctx, url, uvPath)
