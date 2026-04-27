@@ -6,6 +6,7 @@ import pytest
 from vyx.context import (
     get_correlation_id,
     set_correlation_id,
+    reset_correlation_id,
     clear_correlation_id,
 )
 
@@ -109,3 +110,50 @@ def test_context_in_thread():
     assert get_correlation_id() == ''
     # Thread should have its own context
     assert result == ['thread-id']
+
+
+def test_set_correlation_id_returns_token():
+    """set_correlation_id must return a usable Token for reset."""
+    from contextvars import Token
+    token = set_correlation_id('token-test')
+    assert isinstance(token, Token)
+    reset_correlation_id(token)
+    assert get_correlation_id() == ''
+
+
+def test_reset_restores_previous_value():
+    """reset_correlation_id must restore the previous value, not force empty string."""
+    set_correlation_id('outer')
+    token = set_correlation_id('inner')
+    reset_correlation_id(token)
+    assert get_correlation_id() == 'outer'  # restored 'outer', not ''
+    clear_correlation_id()
+
+
+@pytest.mark.asyncio
+async def test_nested_dispatch_restores_outer_context():
+    """Nested dispatch must restore outer context's correlation_id."""
+    from vyx.dispatch import Dispatcher, IPCPayload
+
+    dispatcher = Dispatcher('test-worker')
+
+    def inner_handler(req):
+        return {'id': get_correlation_id()}
+
+    dispatcher.add_route('GET', '/inner', inner_handler)
+
+    set_correlation_id('outer-id')
+
+    payload = IPCPayload({
+        'method': 'GET', 'path': '/inner',
+        'headers': {}, 'query': {}, 'params': {},
+        'body': None, 'claims': None,
+        'correlation_id': 'inner-id',
+    })
+
+    response = dispatcher.dispatch(payload)
+
+    # after dispatch, outer context must be restored
+    assert get_correlation_id() == 'outer-id'
+    assert response['body']['id'] == 'inner-id'
+    clear_correlation_id()

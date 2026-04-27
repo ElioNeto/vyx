@@ -1,6 +1,7 @@
 from .context import (
     get_correlation_id,
     set_correlation_id,
+    reset_correlation_id,
     clear_correlation_id,
 )
 from .dispatch import (
@@ -11,7 +12,8 @@ from .dispatch import (
 
 __all__ = [
     "get_correlation_id",
-    "set_correlation_id", 
+    "set_correlation_id",
+    "reset_correlation_id",
     "clear_correlation_id",
     "Dispatcher",
     "IPCPayload",
