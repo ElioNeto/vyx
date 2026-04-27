@@ -70,6 +70,21 @@ func (m *Multiplexer) Entries() []log.Entry {
 // Each line is parsed via domain/log.ParseEntry with the given workerID.
 // Returns a stop function to halt the goroutine.
 func (m *Multiplexer) AddSource(workerID string, r io.Reader) func() {
+	return m.scanSource(workerID, r, log.ParseEntry)
+}
+
+// AddSourceWithPrefix is like AddSource but prepends a source tag for raw lines.
+func (m *Multiplexer) AddSourceWithPrefix(sourceTag string, r io.Reader) func() {
+	return m.scanSource(sourceTag, r, func(workerID string, line string) log.Entry {
+		entry := log.ParseEntry("", line)
+		if entry.Source == "" {
+			entry.Source = sourceTag
+		}
+		return entry
+	})
+}
+
+func (m *Multiplexer) scanSource(workerID string, r io.Reader, parseFn func(string, string) log.Entry) func() {
 	stopCh := make(chan struct{})
 	go func() {
 		scanner := bufio.NewScanner(r)
@@ -80,15 +95,7 @@ func (m *Multiplexer) AddSource(workerID string, r io.Reader) func() {
 				return
 			default:
 				if scanner.Scan() {
-					line := scanner.Text()
-					if line == "" {
-						continue
-					}
-					entry := log.ParseEntry(workerID, line)
-					if entry.Source == "" {
-						entry.Source = workerID
-					}
-					m.Push(entry)
+					m.processScannerLine(workerID, parseFn, scanner.Text())
 				}
 				if err := scanner.Err(); err != nil {
 					return
@@ -100,36 +107,15 @@ func (m *Multiplexer) AddSource(workerID string, r io.Reader) func() {
 	return func() { close(stopCh) }
 }
 
-// AddSourceWithPrefix is like AddSource but prepends a source tag for raw lines.
-func (m *Multiplexer) AddSourceWithPrefix(sourceTag string, r io.Reader) func() {
-	stopCh := make(chan struct{})
-	go func() {
-		scanner := bufio.NewScanner(r)
-		scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
-		for {
-			select {
-			case <-stopCh:
-				return
-			default:
-				if scanner.Scan() {
-					line := scanner.Text()
-					if line == "" {
-						continue
-					}
-					entry := log.ParseEntry("", line)
-					if entry.Source == "" {
-						entry.Source = sourceTag
-					}
-					m.Push(entry)
-				}
-				if err := scanner.Err(); err != nil {
-					return
-				}
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
-	}()
-	return func() { close(stopCh) }
+func (m *Multiplexer) processScannerLine(workerID string, parseFn func(string, string) log.Entry, line string) {
+	if line == "" {
+		return
+	}
+	entry := parseFn(workerID, line)
+	if entry.Source == "" {
+		entry.Source = workerID
+	}
+	m.Push(entry)
 }
 
 // Subscribe returns a channel that receives new entries as they are pushed.

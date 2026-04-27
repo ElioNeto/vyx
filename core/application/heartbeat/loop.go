@@ -123,7 +123,7 @@ func (l *Loop) Run(ctx context.Context) {
 	}
 }
 
-func (l *Loop) receiveWithTimeout(ctx context.Context, startTime time.Time) (*ipc.Message, error) {
+func (l *Loop) receiveWithTimeout(ctx context.Context, startTime time.Time) (ipc.Message, error) {
 	readTimeout := l.cfg.ReadTimeout
 	if readTimeout == 0 {
 		readTimeout = l.cfg.Interval * 2
@@ -170,7 +170,7 @@ func (l *Loop) handleReceiveError(ctx context.Context, missed int, startTime tim
 	return missed
 }
 
-func (l *Loop) handleMessage(ctx context.Context, msg *ipc.Message) {
+func (l *Loop) handleMessage(ctx context.Context, msg ipc.Message) {
 	switch msg.Type {
 	case ipc.TypeHandshake:
 		l.log.Info("handshake received on heartbeat loop — worker connected",

@@ -47,17 +47,28 @@ func NewService(
 	}
 }
 
+// SpawnWorkerConfig holds parameters for SpawnWorker.
+type SpawnWorkerConfig struct {
+	ID              string
+	Command         string
+	Args            []string
+	WorkDir         string
+	ShutdownTimeout time.Duration
+	RuntimeVersion  string
+	VyxDir          string
+}
+
 // SpawnWorker registers a new worker and starts its process.
-func (s *Service) SpawnWorker(ctx context.Context, id, command string, args []string, workDir string, shutdownTimeout time.Duration, runtimeVersion, vyxDir string) (*worker.Worker, error) {
-	if command == "" {
+func (s *Service) SpawnWorker(ctx context.Context, cfg SpawnWorkerConfig) (*worker.Worker, error) {
+	if cfg.Command == "" {
 		return nil, worker.ErrInvalidCommand
 	}
 
-	vyxDir = resolveVyxDir(vyxDir)
-	rt := runtime.Detect(command)
+	vyxDir := resolveVyxDir(cfg.VyxDir)
+	rt := runtime.Detect(cfg.Command)
 
-	if rt != runtime.RuntimeUnknown && runtime.NeedsProvisioning(command) {
-		rtVersion := runtimeVersion
+	if rt != runtime.RuntimeUnknown && runtime.NeedsProvisioning(cfg.Command) {
+		rtVersion := cfg.RuntimeVersion
 		if rtVersion == "" {
 			rtVersion = rt.DefaultVersion()
 		}
@@ -69,16 +80,16 @@ func (s *Service) SpawnWorker(ctx context.Context, id, command string, args []st
 		if err != nil {
 			return nil, fmt.Errorf("resolve runtime: %w", err)
 		}
-		command = resolvedPath + " " + command
+		cfg.Command = resolvedPath + " " + cfg.Command
 	}
 
 	w := &worker.Worker{
-		ID:              id,
-		Command:         command,
-		Args:            args,
-		WorkDir:         workDir,
-		RuntimeVersion:  runtimeVersion,
-		ShutdownTimeout: shutdownTimeout,
+		ID:              cfg.ID,
+		Command:         cfg.Command,
+		Args:            cfg.Args,
+		WorkDir:         cfg.WorkDir,
+		RuntimeVersion:  cfg.RuntimeVersion,
+		ShutdownTimeout: cfg.ShutdownTimeout,
 		State:           worker.StateStarting,
 		CreatedAt:       time.Now(),
 		UpdatedAt:       time.Now(),

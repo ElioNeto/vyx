@@ -70,7 +70,11 @@ func TestSpawnWorker_Success(t *testing.T) {
 	mgr := &mockManager{}
 	svc, pub := newTestService(mgr)
 
-	w, err := svc.SpawnWorker(context.Background(), "node:api", "node", []string{"worker.js"}, "", 0, "", "")
+	w, err := svc.SpawnWorker(context.Background(), lifecycle.SpawnWorkerConfig{
+		ID:     "node:api",
+		Command: "node",
+		Args:    []string{"worker.js"},
+	})
 
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -90,7 +94,10 @@ func TestSpawnWorker_EmptyCommand(t *testing.T) {
 	mgr := &mockManager{}
 	svc, _ := newTestService(mgr)
 
-	_, err := svc.SpawnWorker(context.Background(), "node:api", "", nil, "", 0, "", "")
+	_, err := svc.SpawnWorker(context.Background(), lifecycle.SpawnWorkerConfig{
+		ID:      "node:api",
+		Command: "",
+	})
 
 	if err != worker.ErrInvalidCommand {
 		t.Errorf("expected ErrInvalidCommand, got %v", err)
@@ -101,7 +108,10 @@ func TestSpawnWorker_SpawnFailure(t *testing.T) {
 	mgr := &mockManager{spawnErr: worker.ErrSpawnFailed}
 	svc, _ := newTestService(mgr)
 
-	_, err := svc.SpawnWorker(context.Background(), "node:api", "node", nil, "", 0, "", "")
+	_, err := svc.SpawnWorker(context.Background(), lifecycle.SpawnWorkerConfig{
+		ID:      "node:api",
+		Command: "node",
+	})
 
 	if err != worker.ErrSpawnFailed {
 		t.Errorf("expected ErrSpawnFailed, got %v", err)
@@ -112,7 +122,10 @@ func TestStopWorker_Success(t *testing.T) {
 	mgr := &mockManager{}
 	svc, _ := newTestService(mgr)
 
-	_, _ = svc.SpawnWorker(context.Background(), "node:api", "node", nil, "", 0, "", "")
+	_, _ = svc.SpawnWorker(context.Background(), lifecycle.SpawnWorkerConfig{
+		ID:      "node:api",
+		Command: "node",
+	})
 	_ = svc.MarkRunning(context.Background(), "node:api")
 	err := svc.StopWorker(context.Background(), "node:api")
 
@@ -139,7 +152,10 @@ func TestRecordHeartbeat_UpdatesTimestamp(t *testing.T) {
 	mgr := &mockManager{}
 	svc, _ := newTestService(mgr)
 
-	_, _ = svc.SpawnWorker(context.Background(), "node:api", "node", nil, "", 0, "", "")
+	_, _ = svc.SpawnWorker(context.Background(), lifecycle.SpawnWorkerConfig{
+		ID:      "node:api",
+		Command: "node",
+	})
 	err := svc.RecordHeartbeat(context.Background(), "node:api")
 
 	if err != nil {
@@ -151,7 +167,10 @@ func TestRecordHeartbeat_UpdatesTimestamp(t *testing.T) {
 	mgr := &mockManager{}
 	svc, _ := newTestService(mgr)
 
-	_, _ = svc.SpawnWorker(context.Background(), "node:api", "node", nil, "", 0, "", "")
+	_, _ = svc.SpawnWorker(context.Background(), lifecycle.SpawnWorkerConfig{
+		ID:      "node:api",
+		Command: "node",
+	})
 	_ = svc.MarkRunning(context.Background(), "node:api")
 	_ = svc.MarkUnhealthy(context.Background(), "node:api")
 	err := svc.RestartWorker(context.Background(), "node:api")

@@ -726,7 +726,15 @@ func runServer(devMode bool, withTUI bool) {
 			if vyxDir == "" {
 				vyxDir = ".vyx"
 			}
-			w, err := service.SpawnWorker(ctx, workerID, cmd, cmdArgs, workDir, wcfg.ShutdownTimeout, wcfg.RuntimeVersion, vyxDir)
+			w, err := service.SpawnWorker(ctx, lifecycle.SpawnWorkerConfig{
+				ID:              workerID,
+				Command:         cmd,
+				Args:            cmdArgs,
+				WorkDir:         workDir,
+				ShutdownTimeout: wcfg.ShutdownTimeout,
+				RuntimeVersion:  wcfg.RuntimeVersion,
+				VyxDir:          vyxDir,
+			})
 			if err != nil {
 				log.Error("failed to spawn worker",
 					zap.String("worker_id", workerID),

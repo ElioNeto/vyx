@@ -44,6 +44,48 @@ auth_re = re.compile(r'@Auth\(roles:\s*\[([^\]]*)\]\)')
 validate_re = re.compile(r'@Validate\((\w+)\)')
 
 
+def _parse_auth(pending_auth: str | None) -> AuthConfig | None:
+    """Parse auth annotation string into AuthConfig."""
+    if not pending_auth:
+        return None
+    am = auth_re.match(pending_auth)
+    if not am:
+        return None
+    roles_str = am.group(1)
+    roles = [r.strip().strip('"') for r in roles_str.split(',') if r.strip()]
+    return AuthConfig(required=True, roles=roles)
+
+
+def _parse_validate(pending_validate: str | None, symbol: str) -> ValidateConfig | None:
+    """Parse validate annotation string into ValidateConfig."""
+    if not pending_validate:
+        return None
+    vm = validate_re.match(pending_validate)
+    if not vm:
+        return None
+    validate_type = vm.group(1).strip()
+    return ValidateConfig(type=validate_type, model=symbol)
+
+
+def _is_annotation(line: str) -> str | None:
+    """Check if line is an annotation comment. Returns the annotation text or None."""
+    if not line.startswith('#'):
+        return None
+    text = line[1:].strip()
+    if route_re.match(text) or auth_re.match(text) or validate_re.match(text):
+        return text
+    return None
+
+
+def _is_symbol_definition(line: str) -> str | None:
+    """Check if line defines a function or class. Returns the symbol name or None."""
+    if line.startswith('def ') or line.startswith('class ') or line.startswith('async def '):
+        match = re.match(r'(?:async\s+)?(?:def|class)\s+(\w+)', line)
+        if match:
+            return match.group(1)
+    return None
+
+
 def scan_file(filepath: str | Path, worker_id: str) -> list[RouteEntry]:
     """
     Scan a single Python file for @Route annotations.
@@ -63,61 +105,17 @@ def scan_file(filepath: str | Path, worker_id: str) -> list[RouteEntry]:
     for i, line in enumerate(lines):
         stripped = line.strip()
 
-        if stripped.startswith('#'):
-            comment = stripped[1:].strip()
-
-            if route_re.match(comment):
-                pending_route = comment
-            elif auth_re.match(comment):
-                pending_auth = comment
-            elif validate_re.match(comment):
-                pending_validate = comment
+        if annotation := _is_annotation(stripped):
+            pending_route, pending_auth, pending_validate = _update_pending(
+                annotation, pending_route, pending_auth, pending_validate)
             continue
 
-        if stripped.startswith('def ') or stripped.startswith('class ') or stripped.startswith('async def '):
-            symbol_match = re.match(r'(?:async\s+)?(?:def|class)\s+(\w+)', stripped)
-            if not symbol_match:
-                continue
-
-            symbol = symbol_match.group(1)
-            line_num = i + 1
-
-            if pending_route:
-                m = route_re.match(pending_route)
-                method = m.group(1).upper()
-                route_path = m.group(2).strip()
-
-                auth_cfg = None
-                if pending_auth:
-                    am = auth_re.match(pending_auth)
-                    if am:
-                        roles_str = am.group(1)
-                        roles = [r.strip().strip('"') for r in roles_str.split(',') if r.strip()]
-                        auth_cfg = AuthConfig(required=True, roles=roles)
-
-                validate_cfg = None
-                if pending_validate:
-                    vm = validate_re.match(pending_validate)
-                    if vm:
-                        validate_type = vm.group(1).strip()
-                        validate_cfg = ValidateConfig(type=validate_type, model=symbol)
-
-                source = SourceLocation(
-                    file=str(path),
-                    line=line_num,
-                    symbol=symbol
-                )
-
-                entry = RouteEntry(
-                    method=method,
-                    path=route_path,
-                    worker_id=worker_id,
-                    auth=auth_cfg,
-                    validate=validate_cfg,
-                    source=source
-                )
+        if symbol := _is_symbol_definition(stripped):
+            entry = _maybe_build_entry(
+                path, i, symbol, worker_id,
+                pending_route, pending_auth, pending_validate)
+            if entry:
                 entries.append(entry)
-
             pending_route = None
             pending_auth = None
             pending_validate = None
@@ -129,6 +127,44 @@ def scan_file(filepath: str | Path, worker_id: str) -> list[RouteEntry]:
             pending_validate = None
 
     return entries
+
+
+def _update_pending(annotation: str, pr: str | None, pa: str | None, pv: str | None) -> tuple[str | None, str | None, str | None]:
+    """Update pending annotations based on annotation type."""
+    if route_re.match(annotation):
+        return annotation, pa, pv
+    if auth_re.match(annotation):
+        return pr, annotation, pv
+    if validate_re.match(annotation):
+        return pr, pa, annotation
+    return pr, pa, pv
+
+
+def _maybe_build_entry(
+    path: Path,
+    line_idx: int,
+    symbol: str,
+    worker_id: str,
+    pending_route: str | None,
+    pending_auth: str | None,
+    pending_validate: str | None,
+) -> RouteEntry | None:
+    """Build a RouteEntry if there's a pending route annotation."""
+    if not pending_route:
+        return None
+
+    m = route_re.match(pending_route)
+    if not m:
+        return None
+
+    return RouteEntry(
+        method=m.group(1).upper(),
+        path=m.group(2).strip(),
+        worker_id=worker_id,
+        auth=_parse_auth(pending_auth),
+        validate=_parse_validate(pending_validate, symbol),
+        source=SourceLocation(file=str(path), line=line_idx + 1, symbol=symbol),
+    )
 
 
 def scan_directory(directory: str | Path, worker_id: str, pattern: str = "**/*.py") -> list[RouteEntry]:
