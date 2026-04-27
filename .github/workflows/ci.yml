@@ -29,10 +29,10 @@ jobs:
           cd ../cmd/vyx && go build ./...
           cd ../../examples/hello-world/workers/go && go build ./...
 
-      - name: Lint (golangci-lint)
-        uses: golangci/golangci-lint-action@v6
+- name: Lint (golangci-lint)
+        uses: golangci/golangci-lint-action@v7
         with:
-          version: v2.1.6
+          version: v2.11
           working-directory: core
 
       - name: Test with coverage
