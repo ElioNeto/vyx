@@ -21,38 +21,48 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
+          go-version: '1.25.9'
 
       - uses: actions/cache@v5
         with:
           path: ~/go/pkg/mod
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
           restore-keys: ${{ runner.os }}-go-
-
+ 
       - name: Build
         run: |
           cd core && go build ./...
           cd ../cmd/vyx && go build ./...
           cd ../../examples/hello-world/workers/go && go build ./...
-
+ 
       - name: Lint (golangci-lint)
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.11.4
           working-directory: core
-
-      - name: Test with coverage
+ 
+      - name: Test with coverage (min 80%)
         run: |
-          cd core && go test -v ./... -coverprofile=coverage.txt -covermode=atomic
+          cd core
+          go test -v ./... -coverprofile=coverage_raw.txt -covermode=atomic -coverpkg=./...
+          chmod +x ../scripts/filter-coverage.sh
+          ../scripts/filter-coverage.sh coverage_raw.txt coverage.txt
+          COVERAGE=$(go tool cover -func=coverage.txt | grep total | awk '{print substr($3, 1, length($3)-1)}')
+          echo "Coverage: ${COVERAGE}%"
+          if [ "$(awk "BEGIN {print ($COVERAGE < 80)}")" -eq 1 ]; then
+            echo "ERROR: Coverage ${COVERAGE}% is below minimum 80%"
+            exit 1
+          fi
           cd ../scanner && go test -v ./...
-
+        shell: bash
+ 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
           files: core/coverage.txt
           flags: go
           token: ${{ secrets.CODECOV_TOKEN }}
-
+ 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v7
         with:
@@ -111,7 +121,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
+          go-version: '1.25.9'
 
       - name: Test scanner
         run: cd scanner && go test -v ./...
@@ -229,14 +239,12 @@ jobs:
         with:
           name: go-coverage
           path: core/
-        continue-on-error: true
 
       - name: Download Python coverage
         uses: actions/download-artifact@v8
         with:
           name: python-coverage
           path: packages/python/
-        continue-on-error: true
 
       - name: SonarCloud Scan
         uses: sonarsource/sonarcloud-github-action@master
@@ -261,13 +269,25 @@ jobs:
               "https://sonarcloud.io/api/ce/component?component=${PROJECT_KEY}" || echo '{}')
             STATUS=$(echo "${RESPONSE}" | python3 <(echo "${PARSE_STATUS}" | base64 -d) 2>/dev/null || echo "UNKNOWN")
             echo "  status: ${STATUS}"
+            
+            # If FAILED, exit with error to fail the pipeline
+            if [ "$STATUS" = "FAILED" ]; then
+              echo "ERROR: SonarCloud analysis failed!"
+              exit 1
+            fi
+            
             case "${STATUS}" in
-              SUCCESS|FAILED|CANCELED|NONE) break ;;
+              SUCCESS|NONE) break ;;
+              CANCELED) 
+                echo "WARNING: SonarCloud analysis was canceled"
+                break 
+                ;;
             esac
+            
             i=$((i+1))
             if [ $i -ge $MAX_RETRIES ]; then
-              echo "Timed out. Continuing anyway."
-              break
+              echo "Timed out. Failing pipeline."
+              exit 1
             fi
             sleep 10
           done
@@ -276,7 +296,7 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
-          echo 'aW1wb3J0IG9zLCBqc29uLCB1cmxsaWIucmVxdWVzdCwgdXJsbGliLnBhcnNlCgpUT0tFTiA9IG9zLmVudmlyb25bIlNPTkFSX1RPS0VOIl0KUFJPSkVDVF9LRVkgPSAiRWxpb05ldG9fdnl4IgpCQVNFX1VSTCA9ICJodHRwczovL3NvbmFyY2xvdWQuaW8vYXBpIgoKCmRlZiBzb25hcl9nZXQocGF0aCwgcGFyYW1zPU5vbmUpOgogICAgdXJsID0gIiVzLyVzIiAlIChCQVNFX1VSTCwgcGF0aCkKICAgIGlmIHBhcmFtczoKICAgICAgICB1cmwgKz0gIj8iICsgdXJsbGliLnBhcnNlLnVybGVuY29kZShwYXJhbXMpCiAgICByZXEgPSB1cmxsaWIucmVxdWVzdC5SZXF1ZXN0KHVybCwgaGVhZGVycz17IkF1dGhvcml6YXRpb24iOiAiQmVhcmVyICIgKyBUT0tFTn0pCiAgICB3aXRoIHVybGxpYi5yZXF1ZXN0LnVybG9wZW4ocmVxLCB0aW1lb3V0PTMwKSBhcyByOgogICAgICAgIHJldHVybiBqc29uLmxvYWRzKHIucmVhZCgpKQoKCk1FVFJJQ19LRVlTID0gKAogICAgImJ1Z3MsdnVsbmVyYWJpbGl0aWVzLGNvZGVfc21lbGxzLHNlY3VyaXR5X2hvdHNwb3RzLCIKICAgICJjb3ZlcmFnZSxkdXBsaWNhdGVkX2xpbmVzX2RlbnNpdHksbmNsb2Msc3FhbGVfcmF0aW5nLCIKICAgICJyZWxpYWJpbGl0eV9yYXRpbmcsc2VjdXJpdHlfcmF0aW5nIgopCm1ldHJpY3NfZGF0YSA9IHNvbmFyX2dldCgibWVhc3VyZXMvY29tcG9uZW50IiwgeyJjb21wb25lbnQiOiBQUk9KRUNUX0tFWSwgIm1ldHJpY0tleXMiOiBNRVRSSUNfS0VZU30pCm1lYXN1cmVzID0ge21bIm1ldHJpYyJdOiBtLmdldCgidmFsdWUiLCAiTi9BIikgZm9yIG0gaW4gbWV0cmljc19kYXRhLmdldCgiY29tcG9uZW50Iiwge30pLmdldCgibWVhc3VyZXMiLCBbXSl9CgphbGxfaXNzdWVzID0gW10KcGFnZSA9IDEKd2hpbGUgVHJ1ZToKICAgIGRhdGEgPSBzb25hcl9nZXQoImlzc3Vlcy9zZWFyY2giLCB7ImNvbXBvbmVudEtleXMiOiBQUk9KRUNUX0tFWSwgInJlc29sdmVkIjogImZhbHNlIiwgInBzIjogNTAwLCAicCI6IHBhZ2V9KQogICAgYWxsX2lzc3Vlcy5leHRlbmQoZGF0YS5nZXQoImlzc3VlcyIsIFtdKSkKICAgIHBhZ2luZyA9IGRhdGEuZ2V0KCJwYWdpbmciLCB7fSkKICAgIGlmIHBhZ2luZy5nZXQoInBhZ2VJbmRleCIsIDEpICogcGFnaW5nLmdldCgicGFnZVNpemUiLCA1MDApID49IHBhZ2luZy5nZXQoInRvdGFsIiwgMCk6CiAgICAgICAgYnJlYWsKICAgIHBhZ2UgKz0gMQoKbGluZXMgPSBbXQpsaW5lcy5hcHBlbmQoIj0iICogNjApCmxpbmVzLmFwcGVuZCgiICBTb25hckNsb3VkIFJlcG9ydCAtLSAiICsgUFJPSkVDVF9LRVkpCmxpbmVzLmFwcGVuZCgiPSIgKiA2MCkKbGluZXMuYXBwZW5kKCIiKQpsaW5lcy5hcHBlbmQoIk1FVFJJQ1MiKQpsaW5lcy5hcHBlbmQoIi0iICogNDApCmxhYmVsX21hcCA9IHsKICAgICJidWdzIjogIkJ1Z3MiLAogICAgInZ1bG5lcmFiaWxpdGllcyI6ICJWdWxuZXJhYmlsaXRpZXMiLAogICAgImNvZGVfc21lbGxzIjogIkNvZGUgU21lbGxzIiwKICAgICJzZWN1cml0eV9ob3RzcG90cyI6ICJTZWN1cml0eSBIb3RzcG90cyIsCiAgICAiY292ZXJhZ2UiOiAiQ292ZXJhZ2UgKCUpIiwKICAgICJkdXBsaWNhdGVkX2xpbmVzX2RlbnNpdHkiOiAiRHVwbGljYXRpb24gKCUpIiwKICAgICJuY2xvYyI6ICJMaW5lcyBvZiBDb2RlIiwKICAgICJzcWFsZV9yYXRpbmciOiAiTWFpbnRhaW5hYmlsaXR5IFJhdGluZyIsCiAgICAicmVsaWFiaWxpdHlfcmF0aW5nIjogIlJlbGlhYmlsaXR5IFJhdGluZyIsCiAgICAic2VjdXJpdHlfcmF0aW5nIjogIlNlY3VyaXR5IFJhdGluZyIsCn0KZm9yIGtleSwgbGFiZWwgaW4gbGFiZWxfbWFwLml0ZW1zKCk6CiAgICBsaW5lcy5hcHBlbmQoIiAgJS0yOHMgJXMiICUgKGxhYmVsLCBtZWFzdXJlcy5nZXQoa2V5LCAiTi9BIikpKQpsaW5lcy5hcHBlbmQoIiIpCmxpbmVzLmFwcGVuZCgiT1BFTiBJU1NVRVMgICh0b3RhbDogJWQpIiAlIGxlbihhbGxfaXNzdWVzKSkKbGluZXMuYXBwZW5kKCItIiAqIDQwKQpmb3IgaXNzdWUgaW4gYWxsX2lzc3VlczoKICAgIGNvbXBvbmVudCA9IGlzc3VlLmdldCgiY29tcG9uZW50IiwgIiIpLnJlcGxhY2UoUFJPSkVDVF9LRVkgKyAiOiIsICIiKQogICAgbGluZXMuYXBwZW5kKCIgIFslc10gWyVzXSIgJSAoaXNzdWUuZ2V0KCJ0eXBlIiwgIj8iKSwgaXNzdWUuZ2V0KCJzZXZlcml0eSIsICI/IikpKQogICAgbGluZXMuYXBwZW5kKCIgICAgRmlsZSAgIDogIiArIGNvbXBvbmVudCkKICAgIGxpbmVzLmFwcGVuZCgiICAgIExpbmUgICA6ICIgKyBzdHIoaXNzdWUuZ2V0KCJsaW5lIiwgIk4vQSIpKSkKICAgIGxpbmVzLmFwcGVuZCgiICAgIE1lc3NhZ2U6ICIgKyBpc3N1ZS5nZXQoIm1lc3NhZ2UiLCAiIikpCiAgICBsaW5lcy5hcHBlbmQoIiAgICBSdWxlICAgOiAiICsgaXNzdWUuZ2V0KCJydWxlIiwgIiIpKQogICAgbGluZXMuYXBwZW5kKCIiKQoKcmVwb3J0ID0gIlxuIi5qb2luKGxpbmVzKQp3aXRoIG9wZW4oInNvbmFyX3JlcG9ydC50eHQiLCAidyIsIGVuY29kaW5nPSJ1dGYtOCIpIGFzIGY6CiAgICBmLndyaXRlKHJlcG9ydCkKcHJpbnQocmVwb3J0KQpwcmludCgic29uYXJfcmVwb3J0LnR4dCB3cml0dGVuICglZCBpc3N1ZXMpIiAlIGxlbihhbGxfaXNzdWVzKSkK' | base64 -d > /tmp/extract_sonar.py
+          echo 'aW1wb3J0IG9zLCBqc29uLCB1cmxsaWIucmVxdWVzdCwgdXJsbGliLnBhcnNlCgpUT0tFTiA9IG9zLmVudmlyb25bIlNPTkFSX1RPS0VOIl0KUFJPSkVDVF9LRVkgPSAiRWxpb05ldG9fdnl4IgpCQVNFX1VSTCA9ICJodHRwczovL3NvbmFyY2xvdWQuaW8vYXBpIgoKCmRlZiBzb25hcl9nZXQocGF0aCwgcGFyYW1zPU5vbmUpOgogICAgdXJsID0gIiVzLyVzIiAlIChCQVNFX1VSTCwgcGF0aCkKICAgIGlmIHBhcmFtczoKICAgICAgICB1cmwgKz0gIj8iICsgdXJsbGliLnBhcnNlLnVybGVuY29kZShwYXJhbXMpCiAgICByZXEgPSB1cmxsaWIucmVxdWVzdC5SZXF1ZXN0KHVybCwgaGVhZGVycz17IkF1dGhvcml6YXRpb24iOiAiQmVhcmVyICIgKyBUT0tFTn0pCiAgICB3aXRoIHVybGxpYi5yZXF1ZXN0LnVybG9wZW4ocmVxLCB0aW1lb3V0PTMwKSBhcyByOgogICAgICAgIHJldHVybiBqc29uLmxvYWRzKHIucmVhZCgpKQoKCk1FVFJJQ19LRVlTID0gKAogICAgImJ1Z3MsdnVsbmVyYWJpbGl0aWVzLGNvZGVfc21lbGxzLHNlY3VyaXR5X2hvdHNwb3RzLCIKICAgICJjb3ZlcmFnZSxkdXBsaWNhdGVkX2xpbmVzX2RlbnNpdHksbmNsb2Msc3FhbGVfcmF0aW5nLCIKICAgICJyZWxpYWJpbGl0eV9yYXRpbmcsc2VjdXJpdHlfcmF0aW5nIgopCm1ldHJpY3NfZGF0YSA9IHNvbmFyX2dldCgibWVhc3VyZXMvY29tcG9uZW50IiwgeyJjb21wb25lbnQiOiBQUk9KRUNUX0tFWSwgIm1ldHJpY0tleXMiOiBNRVRSSUNfS0VZU30pCm1lYXN1cmVzID0ge21bIm1ldHJpYyJdOiBtLmdldCgidmFsdWUiLCAiTi9BIikgZm9yIG0gaW4gbWV0cmljc19kYXRhLmdldCgiY29tcG9uZW50Iiwge30pLmdldCgibWVhc3VyZXMiLCBbXSl9CgphbGxfaXNzdWVzID0gW10KcGFnZSA9IDEKd2hpbGUgVHJ1ZToKICAgIGRhdGEgPSBzb25hcl9nZXQoImlzc3Vlcy9zZWFyY2giLCB7ImNvbXBvbmVudEtleXMiOiBQUk9KRUNUX0tFWSwgInJlc29sdmVkIjogImZhbHNlIiwgInBzIjogNTAwLCAicCI6IHBhZ2V9KQogICAgYWxsX2lzc3Vlcy5leHRlbmQoZGF0YS5nZXQoImlzc3VlcyIsIFtdKSkKICAgIHBhZ2luZyA9IGRhdGEuZ2V0KCJwYWdpbmciLCB7fSkKICAgIGlmIHBhZ2luZy5nZXQoInBhZ2VJbmRleCIsIDEpICogcGFnaW5nLmdldCgicGFnZVNpemUiLCA1MDApID49IHBhZ2luZy5nZXQoInRvdGFsIiwgMCk6CiAgICAgICAgYnJlYWsKICAgIHBhZ2UgKz0gMQoKbGluZXMgPSBbXQpsaW5lcy5hcHBlbmQoIj0iICogNjApCmxpbmVzLmFwcGVuZCgiICBTb25hckNsb3VkIFJlcG9ydCAtLSAiICsgUFJPSkVDVF9LRVkpCmxpbmVzLmFwcGVuZCgiPSIgKiA2MCkKbGluZXMuYXBwZW5kKCIiKQpsaW5lcy5hcHBlbmQoIk1FVFJJQ1MiKQpsaW5lcy5hcHBlbmQoIi0iICogNDApCmxhYmVsX21hcCA9IHsKICAgICJidWdzIjogIkJ1Z3MiLAogICAgInZ1bG5lcmFiaWxpdGllcyI6ICJWdWxuZXJhYmlsaXRpZXMiLAogICAgImNvZGVfc21lbGxzIjogIkNvZGUgU21l... (line truncated to 2000 chars)
           python3 /tmp/extract_sonar.py
 
       - name: Upload SonarCloud report
@@ -284,4 +304,28 @@ jobs:
         with:
           name: sonar-report
           path: sonar_report.txt
+
+      - name: Fail pipeline if SonarCloud has code smells
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          set -euo pipefail
+          PROJECT_KEY="ElioNeto_vyx"
+          
+          # Get issues count from SonarCloud API
+          RESPONSE=$(curl -sf \
+            -H "Authorization: Bearer ${SONAR_TOKEN}" \
+            "https://sonarcloud.io/api/issues/search?componentKeys=${PROJECT_KEY}&severities=MAJOR,CRITICAL,BLOCKER&statuses=OPEN&ps=1")
+          
+          TOTAL=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('total', 0))")
+          
+          echo "SonarCloud open issues (MAJOR+): $TOTAL"
+          
+          if [ "$TOTAL" -gt 0 ]; then
+            echo "ERROR: SonarCloud found $TOTAL code smells/bugs/vulnerabilities!"
+            echo "Pipeline failed. Please fix the issues in SonarCloud."
+            exit 1
+          fi
+          
+          echo "SUCCESS: No critical issues found in SonarCloud!"
           retention-days: 7
