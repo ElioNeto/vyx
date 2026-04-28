@@ -1,41 +1,111 @@
 #!/usr/bin/env node
+/**
+ * check-todos.ts
+ * Verifica se os TODOs definidos em .task-state.json foram concluídos.
+ * Checa a existência dos arquivos listados em cada TODO e imprime resultado JSON.
+ *
+ * Uso:
+ *   npx tsx scripts/check-todos.ts [.task-state.json]
+ *
+ * Saída (JSON pretty-print):
+ *   { ok: boolean, task: string, totals: {...}, results: [...] }
+ *
+ * Exit code:
+ *   0 = todos os TODOs obrigatórios concluídos
+ *   1 = TODOs pendentes ou arquivo não encontrado
+ */
 import fs from 'node:fs';
 import path from 'node:path';
 
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 type TodoItem = {
   id: string;
   title: string;
   required?: boolean;
-  evidence?: string[];
   files?: string[];
+  evidence?: string[];
 };
 
 type TaskState = {
   task?: string;
-  todos: TodoItem[];
+  todos?: TodoItem[];
 };
 
-function exists(p: string) {
-  return fs.existsSync(path.resolve(p));
+type FileCheck = { file: string; exists: boolean };
+type EvidenceCheck = { evidence: string; present: boolean };
+
+type TodoResult = {
+  id: string;
+  title: string;
+  required: boolean;
+  ok: boolean;
+  files: FileCheck[];
+  evidence: EvidenceCheck[];
+};
+
+type CheckResult = {
+  ok: boolean;
+  task: string | null;
+  totals: { total: number; pending: number; complete: number };
+  results: TodoResult[];
+  error?: string;
+};
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+function fileExists(p: string): boolean {
+  return fs.existsSync(path.resolve(process.cwd(), p));
 }
 
-function main() {
-  const file = process.argv[2] || '.task-state.json';
-  if (!exists(file)) {
-    console.log(JSON.stringify({
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+function main(): void {
+  const stateFile = process.argv[2] ?? '.task-state.json';
+
+  if (!fileExists(stateFile)) {
+    const out: CheckResult = {
       ok: false,
-      error: 'task_state_not_found',
-      file
-    }, null, 2));
+      task: null,
+      totals: { total: 0, pending: 0, complete: 0 },
+      results: [],
+      error: `Arquivo não encontrado: ${stateFile}. Crie o .task-state.json antes de rodar /shipit.`,
+    };
+    console.log(JSON.stringify(out, null, 2));
     process.exit(1);
   }
 
-  const raw = fs.readFileSync(file, 'utf8');
-  const state = JSON.parse(raw) as TaskState;
-  const results = (state.todos || []).map((todo) => {
-    const fileChecks = (todo.files || []).map((f) => ({ file: f, exists: exists(f) }));
-    const evidenceChecks = (todo.evidence || []).map((e) => ({ evidence: e, present: true }));
-    const ok = fileChecks.every((x) => x.exists) && evidenceChecks.every((x) => x.present);
+  let state: TaskState;
+  try {
+    state = JSON.parse(fs.readFileSync(path.resolve(stateFile), 'utf8')) as TaskState;
+  } catch (err) {
+    const out: CheckResult = {
+      ok: false,
+      task: null,
+      totals: { total: 0, pending: 0, complete: 0 },
+      results: [],
+      error: `JSON inválido em ${stateFile}: ${err instanceof Error ? err.message : String(err)}`,
+    };
+    console.log(JSON.stringify(out, null, 2));
+    process.exit(1);
+  }
+
+  const todos = state.todos ?? [];
+
+  const results: TodoResult[] = todos.map((todo) => {
+    const fileChecks: FileCheck[] = (todo.files ?? []).map((f) => ({
+      file: f,
+      exists: fileExists(f),
+    }));
+    // evidence items are informational strings — we trust them as declared by the agent
+    const evidenceChecks: EvidenceCheck[] = (todo.evidence ?? []).map((e) => ({
+      evidence: e,
+      present: true,
+    }));
+    const ok = fileChecks.every((c) => c.exists);
     return {
       id: todo.id,
       title: todo.title,
@@ -47,9 +117,9 @@ function main() {
   });
 
   const pending = results.filter((r) => r.required && !r.ok);
-  const payload = {
+  const out: CheckResult = {
     ok: pending.length === 0,
-    task: state.task || null,
+    task: state.task ?? null,
     totals: {
       total: results.length,
       pending: pending.length,
@@ -58,8 +128,8 @@ function main() {
     results,
   };
 
-  console.log(JSON.stringify(payload, null, 2));
-  process.exit(payload.ok ? 0 : 1);
+  console.log(JSON.stringify(out, null, 2));
+  process.exit(out.ok ? 0 : 1);
 }
 
 main();
