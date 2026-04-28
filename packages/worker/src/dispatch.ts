@@ -173,8 +173,17 @@ export function start(options: WorkerOptions): void {
   const socketPath =
     options.socketPath ??
     (process.platform === 'win32'
-      ? String.raw`\\.\pipe\vyx-node:api`
-      : '/tmp/vyx/node:api.sock');
+      ? String.raw`\\.\pipe\vyx-${options.workerId}`
+      : (() => {
+          // Create socket in user-controlled directory with restricted permissions
+          const os = require('node:os') as typeof import('node:os');
+          const path = require('node:path') as typeof import('node:path');
+          const fs = require('node:fs') as typeof import('node:fs');
+
+          const safeDir = path.join(os.homedir(), '.vyx', 'sockets');
+          fs.mkdirSync(safeDir, { recursive: true, mode: 0o700 });
+          return path.join(safeDir, `vyx-${options.workerId}.sock`);
+        })());
 
   console.log(`[${options.workerId}] connecting to ${socketPath}`);
 

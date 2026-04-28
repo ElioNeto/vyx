@@ -314,7 +314,13 @@ func downloadZip(ctx context.Context, url, targetDir, binaryName string) error {
 	}
 	defer os.Remove(tmpFile)
 
-	cmd := exec.Command("unzip", "-o", "-q", tmpFile, "-d", targetDir)
+	// Use absolute path for unzip to avoid PATH hijacking
+	unzipPath, err := exec.LookPath("unzip")
+	if err != nil {
+		return fmt.Errorf("unzip not found in PATH: %w", err)
+	}
+
+	cmd := exec.Command(unzipPath, "-o", "-q", tmpFile, "-d", targetDir)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("unzip: %w: %s", err, string(out))
 	}

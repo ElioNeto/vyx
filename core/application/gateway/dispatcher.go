@@ -388,15 +388,14 @@ func (d *Dispatcher) sendAndReceive(ctx context.Context, req *dgw.GatewayRequest
 
 	respMsg, err := d.transport.ReceiveResponse(dispatchCtx, route.WorkerID)
 	if err != nil {
-		return d.handleReceiveError(receiveErrorConfig{
-			Ctx:         ctx,
-			Req:         req,
-			Route:       route,
-			Lc:          lc,
-			StatusCode:  statusCode,
-			Err:         err,
-			DispatchCtx: dispatchCtx,
-			Cb:          cb,
+		return d.handleReceiveError(dispatchCtx, receiveErrorConfig{
+			Ctx:        ctx,
+			Req:        req,
+			Route:      route,
+			Lc:         lc,
+			StatusCode: statusCode,
+			Err:        err,
+			Cb:         cb,
 		})
 	}
 
@@ -436,19 +435,18 @@ func (d *Dispatcher) handleSendError(ctx context.Context, req *dgw.GatewayReques
 
 // receiveErrorConfig holds parameters for handleReceiveError.
 type receiveErrorConfig struct {
-	Ctx         context.Context
-	Req         *dgw.GatewayRequest
-	Route       *dgw.RouteEntry
-	Lc          *LifecycleContext
-	StatusCode  *int
-	Err         error
-	DispatchCtx context.Context
-	Cb          *circuit.Breaker
+	Ctx        context.Context
+	Req        *dgw.GatewayRequest
+	Route      *dgw.RouteEntry
+	Lc         *LifecycleContext
+	StatusCode *int
+	Err        error
+	Cb         *circuit.Breaker
 }
 
 // handleReceiveError handles errors when receiving from the worker fails.
-func (d *Dispatcher) handleReceiveError(cfg receiveErrorConfig) (*dgw.WorkerResponse, *dgw.GatewayResponse, bool) {
-	if cfg.DispatchCtx.Err() != nil {
+func (d *Dispatcher) handleReceiveError(ctx context.Context, cfg receiveErrorConfig) (*dgw.WorkerResponse, *dgw.GatewayResponse, bool) {
+	if ctx.Err() != nil {
 		*cfg.StatusCode = 504
 		cfg.Lc.StatusCode = 504
 		cfg.Lc.Err = dgw.ErrUpstreamTimeout
