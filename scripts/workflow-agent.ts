@@ -86,7 +86,7 @@ async function runStepInDocker(opts: {
     '-w', '/workspace',
     ...Object.entries(opts.env).flatMap(([k, v]) => ['-e', `${k}=${v}`]),
     opts.image,
-    opts.shell, '-lc', wrappedCommand,
+    opts.shell, '-c', wrappedCommand,
   ];
 
   return new Promise<number>((resolve, reject) => {

@@ -16,6 +16,7 @@ jobs:
   go-test:
     name: Go — Build, Lint & Test
     runs-on: ubuntu-latest
+    container: golang:1.25
     steps:
       - uses: actions/checkout@v4
 
@@ -31,9 +32,9 @@ jobs:
  
       - name: Build
         run: |
-          cd core && go build ./...
-          cd ../cmd/vyx && go build ./...
-          cd ../../examples/hello-world/workers/go && go build ./...
+          cd core && go build -buildvcs=false ./...
+          cd ../cmd/vyx && go build -buildvcs=false ./...
+          cd ../../examples/hello-world/workers/go && go build -buildvcs=false ./...
  
       - name: Lint (golangci-lint)
         uses: golangci/golangci-lint-action@v7
@@ -45,7 +46,7 @@ jobs:
         run: |
           cd core
           # Test gateway package (has 82.7% coverage)
-          go test -v ./application/gateway/... -coverprofile=coverage_gateway.txt -covermode=atomic
+          go test -buildvcs=false -v ./application/gateway/... -coverprofile=coverage_gateway.txt -covermode=atomic
           COVERAGE_GW=$(go tool cover -func=coverage_gateway.txt | grep total | awk '{print substr($3, 1, length($3)-1)}')
           echo "Gateway coverage: ${COVERAGE_GW}%"
           if [ "$(awk "BEGIN {print ($COVERAGE_GW < 80)}")" -eq 1 ]; then
@@ -54,12 +55,12 @@ jobs:
           fi
           
           # Test other packages (allow lower coverage for now)
-          go test -v ./... -coverprofile=coverage_raw.txt -covermode=atomic
+          go test -buildvcs=false -v ./... -coverprofile=coverage_raw.txt -covermode=atomic
           chmod +x ../scripts/filter-coverage.sh
           ../scripts/filter-coverage.sh coverage_raw.txt coverage.txt
           echo "Full coverage report generated (no minimum enforced for non-gateway packages)"
           
-          cd ../scanner && go test -v ./...
+          cd ../scanner && go test -buildvcs=false -v ./...
         shell: bash
  
       - name: Upload coverage to Codecov
@@ -79,27 +80,17 @@ jobs:
   python-sdk-test:
     name: Python SDK — Lint, Test & Coverage
     runs-on: ubuntu-latest
+    container: python:3.12
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies
+      - name: Install, Lint & Test
         working-directory: packages/python
         run: |
-          python -m pip install --upgrade pip
+          pip install --upgrade pip
           pip install pytest pytest-asyncio pytest-cov msgpack pydantic ruff
           pip install -e .
-
-      - name: Lint (Ruff)
-        working-directory: packages/python
-        run: ruff check vyx/
-
-      - name: Test with coverage
-        working-directory: packages/python
-        run: |
+          ruff check vyx/
           python -m pytest tests/ -v \
             --cov=vyx \
             --cov-report=xml:coverage.xml \
@@ -122,6 +113,7 @@ jobs:
   scanner-test:
     name: Go Scanner — Test
     runs-on: ubuntu-latest
+    container: golang:1.25
     steps:
       - uses: actions/checkout@v4
 
@@ -130,33 +122,26 @@ jobs:
           go-version: '1.25.9'
 
       - name: Test scanner
-        run: cd scanner && go test -v ./...
+        run: cd scanner && go test -buildvcs=false -v ./...
 
   node-sdk-test:
     name: Node.js SDK — Test
     runs-on: ubuntu-latest
+    container: node:20
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '20'
-
-      - name: Install dependencies
+      - name: Install & Test
         working-directory: packages/worker
-        run: npm install
-
-      - name: Test
-        working-directory: packages/worker
-        run: npm test
-
-      - name: Audit npm dependencies
-        working-directory: packages/worker
-        run: npm audit --audit-level=high
+        run: |
+          npm install
+          npm test
+          npm audit --audit-level=high
 
   security-go:
     name: Security — Go (govulncheck)
     runs-on: ubuntu-latest
+    container: golang:1.25
     steps:
       - uses: actions/checkout@v4
 
@@ -167,7 +152,7 @@ jobs:
       - name: govulncheck
         run: |
           cd core
-          GOWORK=off go install golang.org/x/vuln/cmd/govulncheck@latest
+          GOWORK=off go install -buildvcs=false golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
         env:
           GOTOOLCHAIN: auto
@@ -175,6 +160,7 @@ jobs:
   security-python:
     name: Security — Python (pip-audit)
     runs-on: ubuntu-latest
+    container: python:3.12
     steps:
       - uses: actions/checkout@v4
 
@@ -182,12 +168,8 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install pip-audit
-        run: pip install pip-audit
-
-      - name: pip-audit
-        working-directory: packages/python
-        run: pip-audit --requirement <(pip install -e . --dry-run 2>&1 | grep 'Would install' | sed 's/Would install //' | tr ' ' '\n' | sed 's/-[0-9].*//' || true) || pip-audit .
+      - name: Install pip-audit & Run audit
+        run: pip install pip-audit && pip-audit --requirement <(pip install -e . --dry-run 2>&1 | grep 'Would install' | sed 's/Would install //' | tr ' ' '\n' | sed 's/-[0-9].*//' || true) || pip-audit .
 
   secrets-scan:
     name: Security — Secrets (Gitleaks)
