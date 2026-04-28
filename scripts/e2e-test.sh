@@ -43,10 +43,33 @@ fi
 echo "==> Preparing config from example..."
 # Copy the example vyx.yaml and adjust socket_dir
 sed "s|socket_dir:.*|socket_dir: $SOCKET_DIR|" "$EXAMPLE_DIR/vyx.yaml" > "$TMP_DIR/vyx.yaml"
-# Also adjust working_dir for go worker to point to TMP_DIR where worker-go binary is
+# Adjust working_dir for go worker to point to TMP_DIR where worker-go binary is
 sed -i "s|working_dir: ./workers/go|working_dir: $TMP_DIR|" "$TMP_DIR/vyx.yaml"
 # Adjust command for go worker
-sed -i 's|command: go run \.|command: ./worker-go|' "$TMP_DIR/vyx.yaml"
+sed -i 's|command: go run .|command: ./worker-go|' "$TMP_DIR/vyx.yaml"
+
+echo "==> Copying route_map.json from example..."
+if [ -f "$EXAMPLE_DIR/route_map.json" ]; then
+  cp "$EXAMPLE_DIR/route_map.json" "$TMP_DIR/"
+else
+  echo "WARNING: route_map.json not found in example, generating..."
+  # Try to generate using scanner library (not trivial)
+  # For now, create a minimal one
+  cat > "$TMP_DIR/route_map.json" <<EOF
+{
+  "routes": [
+    {
+      "worker_id": "go:api",
+      "path": "/api/hello",
+      "method": "GET",
+      "auth_roles": null,
+      "validate": "",
+      "type": "api"
+    }
+  ]
+}
+EOF
+fi
 
 echo "==> Starting core..."
 cd "$TMP_DIR"
@@ -147,7 +170,7 @@ fi
 echo "==> Testing error scenarios..."
 # Test worker down scenario
 echo "    Stopping Go worker..."
-# Since core manages workers, we can't easily kill worker.  For now, skip.
+# Since core manages workers, we can't easily kill worker. For now, skip.
 # In a real test, we would test that core handles worker crash gracefully.
 
 echo "==> All e2e tests passed!"
