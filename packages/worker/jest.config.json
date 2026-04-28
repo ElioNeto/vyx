@@ -14,6 +14,11 @@
     ]
   },
   "testMatch": ["**/tests/**/*.test.ts"],
-  "collectCoverageFrom": ["src/**/*.ts"],
-  "coverageDirectory": "coverage"
+  "collectCoverageFrom": [
+    "src/**/*.ts",
+    "!**/*.test.ts",
+    "!**/*.spec.ts"
+  ],
+  "coverageDirectory": "coverage",
+  "coverageReporters": ["lcov", "text", "text-summary"]
 }

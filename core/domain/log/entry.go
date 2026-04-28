@@ -24,7 +24,7 @@ func (e Entry) Time() string {
 // ParseEntry attempts to parse a structured JSON log line into an Entry.
 // If the line is not valid JSON, it falls back to a raw text entry with the
 // given source and INFO level.
-func ParseEntry(workerID string, line string) Entry {
+func ParseEntry(workerID, line string) Entry {
 	var entry Entry
 	if err := json.Unmarshal([]byte(line), &entry); err == nil && !entry.Timestamp.IsZero() {
 		return entry

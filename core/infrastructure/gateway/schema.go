@@ -124,7 +124,7 @@ func toValidationError(err error) *dgw.ValidationError {
 	ve := &dgw.ValidationError{}
 
 	var jsErr *jsonschema.ValidationError
-	if ok := asValidationError(err, &jsErr); ok {
+	if asValidationError(err, &jsErr) {
 		for _, cause := range jsErr.Causes {
 			ve.Details = append(ve.Details, dgw.ValidationDetail{
 				Field:   cause.InstanceLocation,

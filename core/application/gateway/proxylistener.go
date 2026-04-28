@@ -27,8 +27,14 @@ type LifecycleContext struct {
 	CorrelationID string
 	Phase         Phase
 
+	// RouteParams stores the path parameters extracted from the route.
+	RouteParams map[string]string
+
+	// WorkerID is set when the request is being tracked for draining.
+	WorkerID string
+
 	// Err is nil on the happy path; set when the Phase is PhaseError or
-	// when a listener calls Abort with an error.
+	// when a listener calls Abort.
 	Err error
 
 	// StatusCode is populated as the pipeline runs (404, 401, 200, …).

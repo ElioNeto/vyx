@@ -17,6 +17,11 @@ import (
 	"github.com/ElioNeto/vyx/core/application/lifecycle"
 )
 
+const (
+	// HeaderCorrelationID is the HTTP header used to propagate correlation IDs.
+	HeaderCorrelationID = "X-Request-Id"
+)
+
 // JWTValidator extracts and verifies a raw JWT string, returning the claims.
 type JWTValidator interface {
 	Validate(token string) (*dgw.Claims, error)
@@ -54,17 +59,8 @@ type DispatcherConfig struct {
 }
 
 // NewDispatcher creates a Dispatcher wired with all required dependencies.
-// For cleaner calls, populate a DispatcherConfig struct.
-func NewDispatcher(
-	routes *dgw.RouteMap,
-	transport ipc.Transport,
-	jwt JWTValidator,
-	schema SchemaValidator,
-	timeout time.Duration,
-	log *zap.Logger,
-	drainer *lifecycle.WorkerDrainer,
-	opts ...interface{},
-) *Dispatcher {
+// Use NewDispatcherFromParams or populate a DispatcherConfig struct for cleaner calls.
+func NewDispatcher(cfg DispatcherConfig, opts ...interface{}) *Dispatcher {
 	var circuitConfig circuit.Config
 	var dispatcherOpts []DispatcherOption
 
@@ -78,7 +74,7 @@ func NewDispatcher(
 	}
 
 	onStateChange := func(sc circuit.StateChange) {
-		log.Info("circuit breaker state change",
+		cfg.Log.Info("circuit breaker state change",
 			zap.String("route_id", sc.RouteID),
 			zap.String("from", sc.From.String()),
 			zap.String("to", sc.To.String()),
@@ -87,14 +83,14 @@ func NewDispatcher(
 		)
 	}
 	d := &Dispatcher{
-		routes:    routes,
-		transport: transport,
-		jwt:       jwt,
-		schema:    schema,
-		timeout:   timeout,
-		log:       log,
-		drainer:   drainer,
-		hooks:     []RequestLifecycle{NewAccessLogLifecycle(log)},
+		routes:    cfg.Routes,
+		transport: cfg.Transport,
+		jwt:       cfg.JWT,
+		schema:    cfg.Schema,
+		timeout:   cfg.Timeout,
+		log:       cfg.Log,
+		drainer:   cfg.Drainer,
+		hooks:     []RequestLifecycle{NewAccessLogLifecycle(cfg.Log)},
 		circuit:   circuit.NewRegistry(circuitConfig, onStateChange),
 	}
 	for _, opt := range dispatcherOpts {
@@ -103,19 +99,10 @@ func NewDispatcher(
 	return d
 }
 
-// NewDispatcherFromParams is an alias for NewDispatcher using a config struct.
-// Use this when you have many parameters to avoid parameter ordering issues.
+// NewDispatcherFromParams is a helper to create a Dispatcher using separate params.
+// Deprecated: Use NewDispatcher with DispatcherConfig instead.
 func NewDispatcherFromParams(cfg DispatcherConfig, circuitConfig circuit.Config, opts ...DispatcherOption) *Dispatcher {
-	return NewDispatcher(
-		cfg.Routes,
-		cfg.Transport,
-		cfg.JWT,
-		cfg.Schema,
-		cfg.Timeout,
-		cfg.Log,
-		cfg.Drainer,
-		circuitConfig,
-	)
+	return NewDispatcher(cfg, circuitConfig, opts)
 }
 
 // DispatcherOption configures a Dispatcher.
@@ -150,162 +137,243 @@ func (d *Dispatcher) Timeout() time.Duration { return d.timeout }
 // Dispatch runs the full pipeline: JWT → route → auth → schema → UDS → response.
 func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dgw.GatewayResponse, error) {
 	start := time.Now()
-
-	// Propagate or generate a correlation ID (#40).
-	correlationID := req.Headers["X-Request-Id"]
-	if correlationID == "" {
-		correlationID = uuid.NewString()
-	}
-	req.Headers["X-Request-Id"] = correlationID
-
+	correlationID := d.initCorrelationID(req)
 	lc := NewLifecycleContext(req)
 	lc.CorrelationID = correlationID
 	statusCode := 0
 
-	// Deferred listeners notification (access log now via AccessLogLifecycle hook).
-	defer func() {
-		latency := time.Since(start)
-		for _, l := range d.listeners {
-			if statusCode >= 400 || lc.Err != nil {
-				l.OnError(lc, lc.Phase)
-			}
-			l.OnPostDispatch(lc, latency)
-		}
-	}()
+	defer d.notifyListeners(lc, &statusCode, start)
 
-	// 1. Route lookup (supports path params via trie, #36).
+	route, ok := d.lookupRoute(req, lc)
+	if !ok {
+		return nil, dgw.ErrRouteNotFound
+	}
+	req.Params = lc.RouteParams
+
+	if resp, ok := d.checkCircuitBreaker(ctx, req, route, lc, &statusCode); !ok {
+		return resp, lc.Err
+	}
+
+	if resp, ok := d.runRouteMatchHooks(ctx, req, lc, &statusCode); !ok {
+		return resp, lc.Err
+	}
+
+	if resp, ok := d.checkDrainStatus(ctx, req, route, lc, &statusCode); !ok {
+		return resp, lc.Err
+	}
+
+	d.trackInFlight(route.WorkerID, lc)
+
+	if resp, ok := d.validateJWT(ctx, req, route, lc, &statusCode); !ok {
+		d.releaseInFlight(lc)
+		return resp, lc.Err
+	}
+
+	if resp, ok := d.validateSchema(ctx, req, route, lc, &statusCode); !ok {
+		d.releaseInFlight(lc)
+		return resp, lc.Err
+	}
+
+	if resp, ok := d.runPreDispatchHooks(ctx, req, *route, lc, &statusCode); !ok {
+		d.releaseInFlight(lc)
+		return resp, lc.Err
+	}
+
+	workerResp, resp, ok := d.sendAndReceive(ctx, req, route, lc, &statusCode)
+	if !ok {
+		d.releaseInFlight(lc)
+		return resp, lc.Err
+	}
+
+	resp = d.processWorkerResponse(ctx, req, workerResp, lc, &statusCode, correlationID)
+	d.releaseInFlight(lc)
+	return resp, nil
+}
+
+// initCorrelationID initializes or generates a correlation ID for the request.
+func (d *Dispatcher) initCorrelationID(req *dgw.GatewayRequest) string {
+	correlationID := req.Headers[HeaderCorrelationID]
+	if correlationID == "" {
+		correlationID = uuid.NewString()
+	}
+	req.Headers[HeaderCorrelationID] = correlationID
+	return correlationID
+}
+
+// notifyListeners defers the listener notifications.
+func (d *Dispatcher) notifyListeners(lc *LifecycleContext, statusCode *int, start time.Time) {
+	latency := time.Since(start)
+	for _, l := range d.listeners {
+		if *statusCode >= 400 || lc.Err != nil {
+			l.OnError(lc, lc.Phase)
+		}
+		l.OnPostDispatch(lc, latency)
+	}
+}
+
+// lookupRoute performs route lookup and returns the route entry.
+func (d *Dispatcher) lookupRoute(req *dgw.GatewayRequest, lc *LifecycleContext) (*dgw.RouteEntry, bool) {
 	result, ok := d.routes.Lookup(req.Method, req.Path)
 	if !ok {
-		statusCode = 404
 		lc.StatusCode = 404
 		lc.Err = dgw.ErrRouteNotFound
 		lc.Phase = PhaseRouteMatch
-		return nil, dgw.ErrRouteNotFound
+		return nil, false
 	}
 	route := result.Entry
 	lc.Route = &route
 	lc.Phase = PhaseRouteMatch
-	req.Params = result.Params
+	lc.RouteParams = result.Params
+	return &route, true
+}
 
-	// 1a. Check circuit breaker — reject if open.
-	// Use method+path as unique route identifier.
+// checkCircuitBreaker checks if the circuit breaker allows the request.
+func (d *Dispatcher) checkCircuitBreaker(ctx context.Context, req *dgw.GatewayRequest, route *dgw.RouteEntry, lc *LifecycleContext, statusCode *int) (*dgw.GatewayResponse, bool) {
 	routeKey := fmt.Sprintf("%s:%s", req.Method, req.Path)
 	cb := d.circuit.Get(routeKey)
 	if !cb.Allow() {
 		state, _, _ := cb.Stats()
-		statusCode = 503
+		*statusCode = 503
 		lc.StatusCode = 503
 		lc.Err = fmt.Errorf("circuit breaker open for route %s (state: %s)", routeKey, state)
 		lc.Phase = PhasePreDispatch
 		return &dgw.GatewayResponse{
 			StatusCode:    503,
-			Headers:     map[string]string{"Retry-After": "30"},
-			Body:        []byte(fmt.Sprintf(`{"error":"circuit breaker open","state":"%s"}`, state)),
-			CorrelationID: correlationID,
-		}, nil
+			Headers:       map[string]string{"Retry-After": "30"},
+			Body:          []byte(fmt.Sprintf(`{"error":"circuit breaker open","state":"%s"}`, state)),
+			CorrelationID: req.Headers[HeaderCorrelationID],
+		}, false
 	}
+	return nil, true
+}
 
-	// 1b. OnRouteMatch hooks — allow middleware to short-circuit before auth.
+// runRouteMatchHooks runs the OnRouteMatch hooks.
+func (d *Dispatcher) runRouteMatchHooks(ctx context.Context, req *dgw.GatewayRequest, lc *LifecycleContext, statusCode *int) (*dgw.GatewayResponse, bool) {
 	for _, l := range d.listeners {
 		l.OnRouteMatch(lc)
 		if resp, aborted := lc.EarlyResponse(); aborted {
-			statusCode = resp.StatusCode
-			resp.CorrelationID = correlationID
-			return resp, lc.Err
+			*statusCode = resp.StatusCode
+			resp.CorrelationID = req.Headers[HeaderCorrelationID]
+			return resp, false
 		}
 	}
+	return nil, true
+}
 
-	// 1b. Check if worker is draining - reject new requests with 503
+// checkDrainStatus checks if the worker is draining.
+func (d *Dispatcher) checkDrainStatus(ctx context.Context, req *dgw.GatewayRequest, route *dgw.RouteEntry, lc *LifecycleContext, statusCode *int) (*dgw.GatewayResponse, bool) {
 	if d.drainer != nil && d.drainer.IsDraining(route.WorkerID) {
-		statusCode = 503
+		*statusCode = 503
 		lc.StatusCode = 503
-		lc.Err = fmt.Errorf("worker %s is draining", route.WorkerID)
+		// Intentionally returning 503, don't set lc.Err to avoid confusing callers
 		lc.Phase = PhasePreDispatch
 		return &dgw.GatewayResponse{
 			StatusCode:    503,
 			Headers:       map[string]string{"Retry-After": "1"},
 			Body:          []byte(`{"error":"worker draining"}`),
-			CorrelationID: correlationID,
-		}, nil
+			CorrelationID: req.Headers[HeaderCorrelationID],
+		}, false
 	}
+	return nil, true
+}
 
-	// 1c. Track in-flight request for graceful draining.
+// trackInFlight tracks the in-flight request for graceful draining.
+func (d *Dispatcher) trackInFlight(workerID string, lc *LifecycleContext) {
 	if d.drainer != nil {
-		d.drainer.Acquire(route.WorkerID)
-		defer d.drainer.Release(route.WorkerID)
+		d.drainer.Acquire(workerID)
+		lc.WorkerID = workerID
+	}
+}
+
+// releaseInFlight releases the in-flight request tracking.
+func (d *Dispatcher) releaseInFlight(lc *LifecycleContext) {
+	if d.drainer != nil && lc.WorkerID != "" {
+		d.drainer.Release(lc.WorkerID)
+	}
+}
+
+// validateJWT handles JWT validation and authorization.
+func (d *Dispatcher) validateJWT(ctx context.Context, req *dgw.GatewayRequest, route *dgw.RouteEntry, lc *LifecycleContext, statusCode *int) (*dgw.GatewayResponse, bool) {
+	if len(route.AuthRoles) == 0 {
+		return nil, true
 	}
 
-	// 2. JWT validation (skip if no auth roles defined).
-	if len(route.AuthRoles) > 0 {
-		token := req.Headers["Authorization"]
-		if token == "" {
-			statusCode = 401
-			lc.StatusCode = 401
-			lc.Err = dgw.ErrUnauthorized
-			lc.Phase = PhasePreDispatch
-			return nil, dgw.ErrUnauthorized
-		}
-		// Strip "Bearer " prefix if present.
-		if len(token) > 7 && token[:7] == "Bearer " {
-			token = token[7:]
-		}
-		claims, err := d.jwt.Validate(token)
-		if err != nil {
-			statusCode = 401
-			lc.StatusCode = 401
-			lc.Err = dgw.ErrUnauthorized
-			lc.Phase = PhasePreDispatch
-			return nil, dgw.ErrUnauthorized
-		}
-		req.Claims = claims
-
-		// 3. Role-based authorisation.
-		if !hasRequiredRole(claims.Roles, route.AuthRoles) {
-			statusCode = 403
-			lc.StatusCode = 403
-			lc.Err = dgw.ErrForbidden
-			lc.Phase = PhasePreDispatch
-			return nil, dgw.ErrForbidden
-		}
+	token := req.Headers["Authorization"]
+	if token == "" {
+		*statusCode = 401
+		lc.StatusCode = 401
+		lc.Err = dgw.ErrUnauthorized
+		lc.Phase = PhasePreDispatch
+		return nil, false
 	}
 
-	// 4. JSON Schema validation.
+	token = d.stripBearerPrefix(token)
+	claims, err := d.jwt.Validate(token)
+	if err != nil {
+		*statusCode = 401
+		lc.StatusCode = 401
+		lc.Err = dgw.ErrUnauthorized
+		lc.Phase = PhasePreDispatch
+		return nil, false
+	}
+	req.Claims = claims
+
+	if !hasRequiredRole(claims.Roles, route.AuthRoles) {
+		*statusCode = 403
+		lc.StatusCode = 403
+		lc.Err = dgw.ErrForbidden
+		lc.Phase = PhasePreDispatch
+		return nil, false
+	}
+
+	return nil, true
+}
+
+// stripBearerPrefix removes the "Bearer " prefix from a token if present.
+func (d *Dispatcher) stripBearerPrefix(token string) string {
+	if len(token) > 7 && token[:7] == "Bearer " {
+		return token[7:]
+	}
+	return token
+}
+
+// validateSchema handles JSON Schema validation.
+func (d *Dispatcher) validateSchema(ctx context.Context, req *dgw.GatewayRequest, route *dgw.RouteEntry, lc *LifecycleContext, statusCode *int) (*dgw.GatewayResponse, bool) {
 	if route.Validate != "" && len(req.Body) > 0 {
 		if err := d.schema.Validate(route.Validate, req.Body); err != nil {
-			statusCode = 400
+			*statusCode = 400
 			lc.StatusCode = 400
 			lc.Err = fmt.Errorf("%w: %v", dgw.ErrSchemaValidation, err)
 			lc.Phase = PhasePreDispatch
-			return nil, lc.Err
+			return nil, false
 		}
 	}
+	return nil, true
+}
 
-	// 5. RequestLifecycle hooks — right before the IPC send.
+// runPreDispatchHooks runs the OnBeforeDispatch hooks.
+func (d *Dispatcher) runPreDispatchHooks(ctx context.Context, req *dgw.GatewayRequest, route dgw.RouteEntry, lc *LifecycleContext, statusCode *int) (*dgw.GatewayResponse, bool) {
 	lc.Phase = PhasePreDispatch
 	for _, hook := range d.hooks {
 		if err := hook.OnBeforeDispatch(ctx, req, &route); err != nil {
-			statusCode = 400
+			*statusCode = 400
 			lc.StatusCode = 400
 			lc.Err = err
-			lc.Phase = PhasePreDispatch
-			return nil, err
+			return nil, false
 		}
 	}
+	return nil, true
+}
 
-	// 6. Build IPC request payload and forward to worker.
-	payload, err := json.Marshal(map[string]any{
-		"method":         req.Method,
-		"path":           req.Path,
-		"headers":        req.Headers,
-		"query":          req.Query,
-		"params":         req.Params,
-		"body":           req.Body,
-		"claims":         req.Claims,
-		"correlation_id": correlationID,
-	})
+// sendAndReceive sends the request to the worker and receives the response.
+func (d *Dispatcher) sendAndReceive(ctx context.Context, req *dgw.GatewayRequest, route *dgw.RouteEntry, lc *LifecycleContext, statusCode *int) (*dgw.WorkerResponse, *dgw.GatewayResponse, bool) {
+	correlationID := req.Headers[HeaderCorrelationID]
+	cb := d.circuit.Get(fmt.Sprintf("%s:%s", req.Method, req.Path))
+
+	payload, err := d.buildIPCPayload(req, correlationID)
 	if err != nil {
-		statusCode = 500
-		return nil, fmt.Errorf("gateway: marshal ipc payload: %w", err)
+		*statusCode = 500
+		return nil, nil, false
 	}
 
 	dispatchCtx, cancel := context.WithTimeout(ctx, d.timeout)
@@ -315,87 +383,134 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 		Type:    ipc.TypeRequest,
 		Payload: payload,
 	}); err != nil {
-		statusCode = 502
-		lc.StatusCode = 502
-		lc.Err = fmt.Errorf("gateway: send to worker %s: %w", route.WorkerID, err)
-		lc.Phase = PhasePreDispatch
-		for _, hook := range d.hooks {
-			hook.OnWorkerError(ctx, route.WorkerID, req, lc.Err)
-		}
-		cb.RecordFailure()
-		return nil, lc.Err
+		return d.handleSendError(ctx, req, route, lc, statusCode, err, cb)
 	}
 
-	// 7. Wait for the worker response (via the demuxed response channel so
-	// heartbeat frames are not consumed here).
 	respMsg, err := d.transport.ReceiveResponse(dispatchCtx, route.WorkerID)
 	if err != nil {
-		if dispatchCtx.Err() != nil {
-			statusCode = 504
-			lc.StatusCode = 504
-			lc.Err = dgw.ErrUpstreamTimeout
-			lc.Phase = PhasePostDispatch
-			for _, hook := range d.hooks {
-				hook.OnWorkerError(ctx, route.WorkerID, req, lc.Err)
-			}
-			cb.RecordFailure()
-			return nil, dgw.ErrUpstreamTimeout
-		}
-		statusCode = 502
-		lc.StatusCode = 502
-		lc.Err = fmt.Errorf("gateway: receive from worker %s: %w", route.WorkerID, err)
-		lc.Phase = PhasePostDispatch
-		for _, hook := range d.hooks {
-			hook.OnWorkerError(ctx, route.WorkerID, req, lc.Err)
-		}
-		cb.RecordFailure()
-		return nil, lc.Err
+		return d.handleReceiveError(receiveErrorConfig{
+			Ctx:         ctx,
+			Req:         req,
+			Route:       route,
+			Lc:          lc,
+			StatusCode:  statusCode,
+			Err:         err,
+			DispatchCtx: dispatchCtx,
+			Cb:          cb,
+		})
 	}
 
 	if respMsg.Type == ipc.TypeError {
-		statusCode = 502
-		lc.StatusCode = 502
-		lc.Err = fmt.Errorf("worker error: %s", string(respMsg.Payload))
-		for _, hook := range d.hooks {
-			hook.OnWorkerError(ctx, route.WorkerID, req, lc.Err)
-		}
-		cb.RecordFailure()
-		return &dgw.GatewayResponse{
-			StatusCode:    502,
-			Body:          respMsg.Payload,
-			CorrelationID: correlationID,
-		}, nil
+		return d.handleWorkerError(ctx, req, route, lc, statusCode, respMsg, cb)
 	}
 
-	// 8. Decode the structured worker response envelope (#39).
+	return d.decodeWorkerResponse(respMsg, correlationID)
+}
+
+// buildIPCPayload builds the IPC request payload.
+func (d *Dispatcher) buildIPCPayload(req *dgw.GatewayRequest, correlationID string) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"method":         req.Method,
+		"path":           req.Path,
+		"headers":        req.Headers,
+		"query":          req.Query,
+		"params":         req.Params,
+		"body":           req.Body,
+		"claims":         req.Claims,
+		"correlation_id": correlationID,
+	})
+}
+
+// handleSendError handles errors when sending to the worker fails.
+func (d *Dispatcher) handleSendError(ctx context.Context, req *dgw.GatewayRequest, route *dgw.RouteEntry, lc *LifecycleContext, statusCode *int, err error, cb *circuit.Breaker) (*dgw.WorkerResponse, *dgw.GatewayResponse, bool) {
+	*statusCode = 502
+	lc.StatusCode = 502
+	lc.Err = fmt.Errorf("gateway: send to worker %s: %w", route.WorkerID, err)
+	lc.Phase = PhasePreDispatch
+	for _, hook := range d.hooks {
+		hook.OnWorkerError(ctx, route.WorkerID, req, lc.Err)
+	}
+	cb.RecordFailure()
+	return nil, nil, false
+}
+
+// receiveErrorConfig holds parameters for handleReceiveError.
+type receiveErrorConfig struct {
+	Ctx         context.Context
+	Req         *dgw.GatewayRequest
+	Route       *dgw.RouteEntry
+	Lc          *LifecycleContext
+	StatusCode  *int
+	Err         error
+	DispatchCtx context.Context
+	Cb          *circuit.Breaker
+}
+
+// handleReceiveError handles errors when receiving from the worker fails.
+func (d *Dispatcher) handleReceiveError(cfg receiveErrorConfig) (*dgw.WorkerResponse, *dgw.GatewayResponse, bool) {
+	if cfg.DispatchCtx.Err() != nil {
+		*cfg.StatusCode = 504
+		cfg.Lc.StatusCode = 504
+		cfg.Lc.Err = dgw.ErrUpstreamTimeout
+		cfg.Lc.Phase = PhasePostDispatch
+	} else {
+		*cfg.StatusCode = 502
+		cfg.Lc.StatusCode = 502
+		cfg.Lc.Err = fmt.Errorf("gateway: receive from worker %s: %w", cfg.Route.WorkerID, cfg.Err)
+		cfg.Lc.Phase = PhasePostDispatch
+	}
+	for _, hook := range d.hooks {
+		hook.OnWorkerError(cfg.Ctx, cfg.Route.WorkerID, cfg.Req, cfg.Lc.Err)
+	}
+	cfg.Cb.RecordFailure()
+	return nil, nil, false
+}
+
+// handleWorkerError handles error responses from the worker.
+func (d *Dispatcher) handleWorkerError(ctx context.Context, req *dgw.GatewayRequest, route *dgw.RouteEntry, lc *LifecycleContext, statusCode *int, respMsg ipc.Message, cb *circuit.Breaker) (*dgw.WorkerResponse, *dgw.GatewayResponse, bool) {
+	*statusCode = 502
+	lc.StatusCode = 502
+	lc.Err = fmt.Errorf("worker error: %s", string(respMsg.Payload))
+	for _, hook := range d.hooks {
+		hook.OnWorkerError(ctx, route.WorkerID, req, lc.Err)
+	}
+	cb.RecordFailure()
+	return nil, &dgw.GatewayResponse{
+		StatusCode:    502,
+		Body:          respMsg.Payload,
+		CorrelationID: req.Headers[HeaderCorrelationID],
+	}, false
+}
+
+// decodeWorkerResponse decodes the worker response.
+func (d *Dispatcher) decodeWorkerResponse(respMsg ipc.Message, correlationID string) (*dgw.WorkerResponse, *dgw.GatewayResponse, bool) {
 	var workerResp dgw.WorkerResponse
 	if err := json.Unmarshal(respMsg.Payload, &workerResp); err != nil {
-		// Fallback: treat raw payload as 200 body for backwards compatibility.
-		statusCode = 200
-		resp := &dgw.GatewayResponse{
-			StatusCode:    200,
-			Body:          respMsg.Payload,
-			CorrelationID: correlationID,
-		}
-		for _, hook := range d.hooks {
-			hook.OnAfterDispatch(ctx, req, resp)
-		}
-		return resp, nil
+		return d.handleDecodeError(respMsg, correlationID)
 	}
-
 	if workerResp.StatusCode == 0 {
 		workerResp.StatusCode = 200
 	}
-	statusCode = workerResp.StatusCode
+	return &workerResp, nil, true
+}
+
+// handleDecodeError handles errors when decoding the worker response.
+func (d *Dispatcher) handleDecodeError(respMsg ipc.Message, correlationID string) (*dgw.WorkerResponse, *dgw.GatewayResponse, bool) {
+	resp := &dgw.GatewayResponse{
+		StatusCode:    200,
+		Body:          respMsg.Payload,
+		CorrelationID: correlationID,
+	}
+	return nil, resp, false
+}
+
+// processWorkerResponse processes the worker response and returns the final gateway response.
+func (d *Dispatcher) processWorkerResponse(ctx context.Context, req *dgw.GatewayRequest, workerResp *dgw.WorkerResponse, lc *LifecycleContext, statusCode *int, correlationID string) *dgw.GatewayResponse {
+	*statusCode = workerResp.StatusCode
 	lc.StatusCode = workerResp.StatusCode
 	lc.Phase = PhasePostDispatch
 
-	// 9. Resolve the final correlation ID (#52):
-	//    prefer the one echoed by the worker; fall back to the request-scoped ID.
-	respCorrelationID := workerResp.CorrelationID
-	if respCorrelationID == "" {
-		respCorrelationID = correlationID
-	}
+	respCorrelationID := d.resolveCorrelationID(workerResp.CorrelationID, correlationID)
 
 	resp := &dgw.GatewayResponse{
 		StatusCode:    workerResp.StatusCode,
@@ -407,14 +522,26 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 		hook.OnAfterDispatch(ctx, req, resp)
 	}
 
-	// Record circuit breaker result.
-	if workerResp.StatusCode >= 500 {
+	d.recordCircuitBreakerResult(req, workerResp.StatusCode)
+	return resp
+}
+
+// resolveCorrelationID returns the worker's correlation ID or falls back to the request's.
+func (d *Dispatcher) resolveCorrelationID(workerCorrelationID, requestCorrelationID string) string {
+	if workerCorrelationID != "" {
+		return workerCorrelationID
+	}
+	return requestCorrelationID
+}
+
+// recordCircuitBreakerResult records success or failure in the circuit breaker.
+func (d *Dispatcher) recordCircuitBreakerResult(req *dgw.GatewayRequest, statusCode int) {
+	cb := d.circuit.Get(fmt.Sprintf("%s:%s", req.Method, req.Path))
+	if statusCode >= 500 {
 		cb.RecordFailure()
 	} else {
 		cb.RecordSuccess()
 	}
-
-	return resp, nil
 }
 
 // hasRequiredRole returns true if the caller holds at least one required role.

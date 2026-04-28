@@ -118,7 +118,7 @@ var (
 )
 
 // styleForSource returns the appropriate color style for a log entry source.
-func styleForSource(source string, level string) lipgloss.Style {
+func styleForSource(source, level string) lipgloss.Style {
 	if strings.ToUpper(level) == "ERROR" {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("#ff4444")).PaddingLeft(1)
 	}

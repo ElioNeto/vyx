@@ -1,0 +1,61 @@
+# Binários e artefatos de build Go
+dist/
+build/
+bin/
+*.exe
+
+# Go workspace e lockfiles
+go.work.sum
+go.sum
+vendor/
+
+# Cobertura e relatórios
+coverage.txt
+coverage.xml
+coverage.out
+*.coverprofile
+
+# Artefatos do vyx
+route_map.json
+annotate
+
+# Dependências Node (scripts)
+scripts/node_modules/
+
+# Assets e mídia
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.ico
+*.woff
+*.woff2
+*.ttf
+*.mp4
+
+# IDE e OS
+.idea/
+.vscode/
+*.DS_Store
+
+# Secrets e envs locais
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.cert
+
+# Logs
+*.log
+logs/
+
+# Cache de ferramentas
+.cache/
+.ruff_cache/
+
+# SonarCloud
+.sonar/
+
+# Task state (gerado por sessão)
+.task-state.json

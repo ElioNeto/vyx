@@ -30,10 +30,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ElioNeto/vyx/core/application/gateway"
-	"github.com/ElioNeto/vyx/core/application/lifecycle"
+	apgw "github.com/ElioNeto/vyx/core/application/gateway"
 	dgw "github.com/ElioNeto/vyx/core/domain/gateway"
 	"github.com/ElioNeto/vyx/core/domain/ipc"
+	"github.com/ElioNeto/vyx/core/application/lifecycle"
 	"go.uber.org/zap"
 )
 
@@ -115,6 +115,60 @@ func makeRequest() *dgw.GatewayRequest {
 
 // ─── test ─────────────────────────────────────────────────────────────────────
 
+// requestResult categorizes the result of a single dispatch.
+type requestResult struct {
+	statusCode int
+	err        error
+}
+
+// dispatchAndClassify sends a request and classifies the result.
+func dispatchAndClassify(dispatcher *apgw.Dispatcher, reqNum int) requestResult {
+	resp, err := dispatcher.Dispatch(context.Background(), makeRequest())
+	sc := 0
+	if resp != nil {
+		sc = resp.StatusCode
+	}
+	return requestResult{statusCode: sc, err: err}
+}
+
+// checkRequestResult validates a single request result and updates counters.
+func checkRequestResult(t *testing.T, reqNum int, result requestResult,
+	ok200, ok503, bad502, badOther *atomic.Int64) {
+	switch {
+	case result.err == nil && result.statusCode == 200:
+		ok200.Add(1)
+	case result.err == nil && result.statusCode == 503:
+		ok503.Add(1)
+	case result.err == nil && result.statusCode == 502:
+		bad502.Add(1)
+		t.Errorf("got 502 on request %d — worker killed while request was in flight", reqNum)
+	default:
+		badOther.Add(1)
+		t.Errorf("unexpected result on request %d: status=%d err=%v", reqNum, result.statusCode, result.err)
+	}
+}
+
+// triggerRollingRestart simulates a rolling restart of the worker.
+func triggerRollingRestart(t *testing.T, drainer *lifecycle.WorkerDrainer,
+	transport *slowTransport, workerID string, shutdownTimeout time.Duration, restartDelay time.Duration) {
+	time.Sleep(restartDelay)
+
+	// Step 1: mark draining — new requests will get 503.
+	drainer.MarkDraining(workerID)
+
+	// Step 2: wait for all in-flight requests to finish.
+	drainCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	if err := drainer.Drain(drainCtx, workerID, shutdownTimeout); err != nil {
+		t.Errorf("drain timed out: %v", err)
+	}
+
+	// Step 3: "kill" old process (cleanup drainer state) + respawn.
+	drainer.Cleanup(workerID)
+	// Re-register IPC socket (simulates process respawn).
+	_ = transport.Register(context.Background(), workerID)
+}
+
 // TestNoDropsDuringRollingRestart verifies that:
 //   - In-flight requests that started before MarkDraining all complete with 200.
 //   - Requests dispatched after MarkDraining receive 503 (not 502).
@@ -137,15 +191,15 @@ func TestNoDropsDuringRollingRestart(t *testing.T) {
 
 	rm := buildRouteMap(workerID)
 
-	dispatcher := gateway.NewDispatcher(
-		rm,
-		transport,
-		stubJWT{},
-		stubSchema{},
-		10*time.Second, // dispatch timeout – much larger than holdDuration
-		log,
-		drainer,
-	)
+	dispatcher := apgw.NewDispatcher(apgw.DispatcherConfig{
+		Routes:    rm,
+		Transport: transport,
+		JWT:       stubJWT{},
+		Schema:    stubSchema{},
+		Timeout:   10 * time.Second, // dispatch timeout – much larger than holdDuration
+		Log:       log,
+		Drainer:   drainer,
+	})
 
 	var (
 		ok503  atomic.Int64 // requests correctly rejected after drain start
@@ -167,46 +221,14 @@ func TestNoDropsDuringRollingRestart(t *testing.T) {
 			if i >= numRequests/2 {
 				time.Sleep(restartDelay * 3)
 			}
-			resp, err := dispatcher.Dispatch(context.Background(), makeRequest())
-			switch {
-			case err == nil && resp.StatusCode == 200:
-				ok200.Add(1)
-			case err == nil && resp.StatusCode == 503:
-				ok503.Add(1)
-			case err == nil && resp.StatusCode == 502:
-				bad502.Add(1)
-				t.Errorf("got 502 on request %d — worker killed while request was in flight", i)
-			default:
-				badOther.Add(1)
-				sc := 0
-				if resp != nil {
-					sc = resp.StatusCode
-				}
-				t.Errorf("unexpected result on request %d: status=%d err=%v", i, sc, err)
-			}
+			result := dispatchAndClassify(dispatcher, i)
+			checkRequestResult(t, i, result, &ok200, &ok503, &bad502, &badOther)
 		}(i)
 	}
 
 	// Trigger the rolling restart after restartDelay — while first-half
 	// requests are still holding the slow transport.
-	go func() {
-		time.Sleep(restartDelay)
-
-		// Step 1: mark draining — new requests will get 503.
-		drainer.MarkDraining(workerID)
-
-		// Step 2: wait for all in-flight requests to finish.
-		drainCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		defer cancel()
-		if err := drainer.Drain(drainCtx, workerID, shutdownTimeout); err != nil {
-			t.Errorf("drain timed out: %v", err)
-		}
-
-		// Step 3: "kill" old process (cleanup drainer state) + respawn.
-		drainer.Cleanup(workerID)
-		// Re-register IPC socket (simulates process respawn).
-		_ = transport.Register(context.Background(), workerID)
-	}()
+	go triggerRollingRestart(t, drainer, transport, workerID, shutdownTimeout, restartDelay)
 
 	wg.Wait()
 
