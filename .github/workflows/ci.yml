@@ -212,6 +212,40 @@ jobs:
         with:
           sarif_file: semgrep.sarif
 
+  e2e:
+    name: End-to-End Tests
+    runs-on: ubuntu-latest
+    container: golang:1.25
+    needs: [go-test, scanner-test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          cd packages/python && pip install -e .
+          cd ../worker && npm install
+
+      - name: Run e2e tests
+        run: bash scripts/e2e-test.sh
+
+      - name: Upload e2e logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-logs
+          path: /tmp/vyx-e2e-*/logs/
+          retention-days: 7
+
   sonarcloud:
     name: Quality — SonarCloud
     runs-on: ubuntu-latest
