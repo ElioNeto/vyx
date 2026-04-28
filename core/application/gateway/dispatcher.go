@@ -132,84 +132,78 @@ func (d *Dispatcher) Timeout() time.Duration { return d.timeout }
 // Dispatch runs the full pipeline: JWT → route → auth → schema → UDS → response.
 func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dgw.GatewayResponse, error) {
 	start := time.Now()
+	correlationID := d.initCorrelationID(req)
+	lc := NewLifecycleContext(req)
+	lc.CorrelationID = correlationID
+	statusCode := 0
 
-	// Propagate or generate a correlation ID (#40).
+	defer d.notifyListeners(lc, &statusCode, start)
+
+	route, ok := d.lookupRoute(req, lc)
+	if !ok {
+		return nil, dgw.ErrRouteNotFound
+	}
+	req.Params = lc.RouteParams
+
+	if resp, ok := d.checkCircuitBreaker(ctx, req, route, lc, &statusCode); !ok {
+		return resp, lc.Err
+	}
+
+	if resp, ok := d.runRouteMatchHooks(ctx, req, lc, &statusCode); !ok {
+		return resp, lc.Err
+	}
+
+	if resp, ok := d.checkDrainStatus(ctx, req, route, lc, &statusCode); !ok {
+		return resp, lc.Err
+	}
+
+	d.trackInFlight(route.WorkerID, lc)
+
+	if resp, ok := d.validateJWT(ctx, req, route, lc, &statusCode); !ok {
+		d.releaseInFlight(lc)
+		return resp, lc.Err
+	}
+
+	if resp, ok := d.validateSchema(ctx, req, route, lc, &statusCode); !ok {
+		d.releaseInFlight(lc)
+		return resp, lc.Err
+	}
+
+	if resp, ok := d.runPreDispatchHooks(ctx, req, *route, lc, &statusCode); !ok {
+		d.releaseInFlight(lc)
+		return resp, lc.Err
+	}
+
+	workerResp, resp, ok := d.sendAndReceive(ctx, req, route, lc, &statusCode)
+	if !ok {
+		d.releaseInFlight(lc)
+		return resp, lc.Err
+	}
+
+	resp = d.processWorkerResponse(ctx, req, workerResp, lc, &statusCode, correlationID)
+	d.releaseInFlight(lc)
+	return resp, nil
+}
+
+// initCorrelationID initializes or generates a correlation ID for the request.
+func (d *Dispatcher) initCorrelationID(req *dgw.GatewayRequest) string {
 	correlationID := req.Headers["X-Request-Id"]
 	if correlationID == "" {
 		correlationID = uuid.NewString()
 	}
 	req.Headers["X-Request-Id"] = correlationID
+	return correlationID
+}
 
-	lc := NewLifecycleContext(req)
-	lc.CorrelationID = correlationID
-	statusCode := 0
-
-	// Deferred listeners notification (access log now via AccessLogLifecycle hook).
-	defer func() {
-		latency := time.Since(start)
-		for _, l := range d.listeners {
-			if statusCode >= 400 || lc.Err != nil {
-				l.OnError(lc, lc.Phase)
-			}
-			l.OnPostDispatch(lc, latency)
+// notifyListeners defers the listener notifications.
+func (d *Dispatcher) notifyListeners(lc *LifecycleContext, statusCode *int, start time.Time) {
+	latency := time.Since(start)
+	for _, l := range d.listeners {
+		if *statusCode >= 400 || lc.Err != nil {
+			l.OnError(lc, lc.Phase)
 		}
-	}()
-
-	// 1. Route lookup (supports path params via trie, #36).
-	route, ok := d.lookupRoute(req, lc)
-	if !ok {
-		statusCode = 404
-		return nil, dgw.ErrRouteNotFound
+		l.OnPostDispatch(lc, latency)
 	}
-	req.Params = lc.RouteParams
-
-	// 2. Check circuit breaker and drain status.
-	if resp, ok := d.checkCircuitBreaker(ctx, req, route, lc, &statusCode); !ok {
-		return resp, lc.Err
-	}
-
-	// 3. OnRouteMatch hooks — allow middleware to short-circuit before auth.
-	if resp, ok := d.runRouteMatchHooks(ctx, req, lc, &statusCode); !ok {
-		return resp, lc.Err
-	}
-
-	// 4. Check if worker is draining.
-	if resp, ok := d.checkDrainStatus(ctx, req, route, lc, &statusCode); !ok {
-		return resp, lc.Err
-	}
-
-	// 5. Track in-flight request for graceful draining.
-	d.trackInFlight(route.WorkerID, lc)
-
-	// 6. JWT validation and authorization.
-	if resp, ok := d.validateJWT(ctx, req, route, lc, &statusCode); !ok {
-		d.releaseInFlight(route.WorkerID)
-		return resp, lc.Err
-	}
-
-	// 7. JSON Schema validation.
-	if resp, ok := d.validateSchema(ctx, req, route, lc, &statusCode); !ok {
-		d.releaseInFlight(route.WorkerID)
-		return resp, lc.Err
-	}
-
-	// 8. RequestLifecycle hooks — right before the IPC send.
-	if resp, ok := d.runPreDispatchHooks(ctx, req, *route, lc, &statusCode); !ok {
-		d.releaseInFlight(route.WorkerID)
-		return resp, lc.Err
-	}
-
-	// 9. Send to worker and receive response.
-	workerResp, resp, ok := d.sendAndReceive(ctx, req, route, lc, &statusCode)
-	if !ok {
-		d.releaseInFlight(route.WorkerID)
-		return resp, lc.Err
-	}
-
-	// 10. Process worker response.
-	resp = d.processWorkerResponse(ctx, req, workerResp, lc, &statusCode, correlationID)
-	d.releaseInFlight(route.WorkerID)
-	return resp, nil
 }
 
 // lookupRoute performs route lookup and returns the route entry.
@@ -240,8 +234,8 @@ func (d *Dispatcher) checkCircuitBreaker(ctx context.Context, req *dgw.GatewayRe
 		lc.Phase = PhasePreDispatch
 		return &dgw.GatewayResponse{
 			StatusCode:    503,
-			Headers:        map[string]string{"Retry-After": "30"},
-			Body:           []byte(fmt.Sprintf(`{"error":"circuit breaker open","state":"%s"}`, state)),
+			Headers:       map[string]string{"Retry-After": "30"},
+			Body:          []byte(fmt.Sprintf(`{"error":"circuit breaker open","state":"%s"}`, state)),
 			CorrelationID: req.Headers["X-Request-Id"],
 		}, false
 	}
@@ -266,7 +260,7 @@ func (d *Dispatcher) checkDrainStatus(ctx context.Context, req *dgw.GatewayReque
 	if d.drainer != nil && d.drainer.IsDraining(route.WorkerID) {
 		*statusCode = 503
 		lc.StatusCode = 503
-		lc.Err = fmt.Errorf("worker %s is draining", route.WorkerID)
+		// Intentionally returning 503, don't set lc.Err to avoid confusing callers
 		lc.Phase = PhasePreDispatch
 		return &dgw.GatewayResponse{
 			StatusCode:    503,
@@ -287,9 +281,9 @@ func (d *Dispatcher) trackInFlight(workerID string, lc *LifecycleContext) {
 }
 
 // releaseInFlight releases the in-flight request tracking.
-func (d *Dispatcher) releaseInFlight(workerID string) {
-	if d.drainer != nil && workerID != "" {
-		d.drainer.Release(workerID)
+func (d *Dispatcher) releaseInFlight(lc *LifecycleContext) {
+	if d.drainer != nil && lc.WorkerID != "" {
+		d.drainer.Release(lc.WorkerID)
 	}
 }
 
@@ -308,11 +302,7 @@ func (d *Dispatcher) validateJWT(ctx context.Context, req *dgw.GatewayRequest, r
 		return nil, false
 	}
 
-	// Strip "Bearer " prefix if present.
-	if len(token) > 7 && token[:7] == "Bearer " {
-		token = token[7:]
-	}
-
+	token = d.stripBearerPrefix(token)
 	claims, err := d.jwt.Validate(token)
 	if err != nil {
 		*statusCode = 401
@@ -323,7 +313,6 @@ func (d *Dispatcher) validateJWT(ctx context.Context, req *dgw.GatewayRequest, r
 	}
 	req.Claims = claims
 
-	// Role-based authorisation.
 	if !hasRequiredRole(claims.Roles, route.AuthRoles) {
 		*statusCode = 403
 		lc.StatusCode = 403
@@ -333,6 +322,14 @@ func (d *Dispatcher) validateJWT(ctx context.Context, req *dgw.GatewayRequest, r
 	}
 
 	return nil, true
+}
+
+// stripBearerPrefix removes the "Bearer " prefix from a token if present.
+func (d *Dispatcher) stripBearerPrefix(token string) string {
+	if len(token) > 7 && token[:7] == "Bearer " {
+		return token[7:]
+	}
+	return token
 }
 
 // validateSchema handles JSON Schema validation.
@@ -363,147 +360,12 @@ func (d *Dispatcher) runPreDispatchHooks(ctx context.Context, req *dgw.GatewayRe
 	return nil, true
 }
 
-	// 6. Build IPC request payload and forward to worker.
-	payload, err := json.Marshal(map[string]any{
-		"method":         req.Method,
-		"path":           req.Path,
-		"headers":        req.Headers,
-		"query":          req.Query,
-		"params":         req.Params,
-		"body":           req.Body,
-		"claims":         req.Claims,
-		"correlation_id": correlationID,
-	})
-	if err != nil {
-		statusCode = 500
-		return nil, fmt.Errorf("gateway: marshal ipc payload: %w", err)
-	}
-
-	dispatchCtx, cancel := context.WithTimeout(ctx, d.timeout)
-	defer cancel()
-
-	if err := d.transport.Send(dispatchCtx, route.WorkerID, ipc.Message{
-		Type:    ipc.TypeRequest,
-		Payload: payload,
-	}); err != nil {
-		statusCode = 502
-		lc.StatusCode = 502
-		lc.Err = fmt.Errorf("gateway: send to worker %s: %w", route.WorkerID, err)
-		lc.Phase = PhasePreDispatch
-		for _, hook := range d.hooks {
-			hook.OnWorkerError(ctx, route.WorkerID, req, lc.Err)
-		}
-		cb.RecordFailure()
-		return nil, lc.Err
-	}
-
-	// 7. Wait for the worker response (via the demuxed response channel so
-	// heartbeat frames are not consumed here).
-	respMsg, err := d.transport.ReceiveResponse(dispatchCtx, route.WorkerID)
-	if err != nil {
-		if dispatchCtx.Err() != nil {
-			statusCode = 504
-			lc.StatusCode = 504
-			lc.Err = dgw.ErrUpstreamTimeout
-			lc.Phase = PhasePostDispatch
-			for _, hook := range d.hooks {
-				hook.OnWorkerError(ctx, route.WorkerID, req, lc.Err)
-			}
-			cb.RecordFailure()
-			return nil, dgw.ErrUpstreamTimeout
-		}
-		statusCode = 502
-		lc.StatusCode = 502
-		lc.Err = fmt.Errorf("gateway: receive from worker %s: %w", route.WorkerID, err)
-		lc.Phase = PhasePostDispatch
-		for _, hook := range d.hooks {
-			hook.OnWorkerError(ctx, route.WorkerID, req, lc.Err)
-		}
-		cb.RecordFailure()
-		return nil, lc.Err
-	}
-
-	if respMsg.Type == ipc.TypeError {
-		statusCode = 502
-		lc.StatusCode = 502
-		lc.Err = fmt.Errorf("worker error: %s", string(respMsg.Payload))
-		for _, hook := range d.hooks {
-			hook.OnWorkerError(ctx, route.WorkerID, req, lc.Err)
-		}
-		cb.RecordFailure()
-		return &dgw.GatewayResponse{
-			StatusCode:    502,
-			Body:          respMsg.Payload,
-			CorrelationID: correlationID,
-		}, nil
-	}
-
-	// 8. Decode the structured worker response envelope (#39).
-	var workerResp dgw.WorkerResponse
-	if err := json.Unmarshal(respMsg.Payload, &workerResp); err != nil {
-		// Fallback: treat raw payload as 200 body for backwards compatibility.
-		statusCode = 200
-		resp := &dgw.GatewayResponse{
-			StatusCode:    200,
-			Body:          respMsg.Payload,
-			CorrelationID: correlationID,
-		}
-		for _, hook := range d.hooks {
-			hook.OnAfterDispatch(ctx, req, resp)
-		}
-		return resp, nil
-	}
-
-	if workerResp.StatusCode == 0 {
-		workerResp.StatusCode = 200
-	}
-	statusCode = workerResp.StatusCode
-	lc.StatusCode = workerResp.StatusCode
-	lc.Phase = PhasePostDispatch
-
-	// 9. Resolve the final correlation ID (#52):
-	//    prefer the one echoed by the worker; fall back to the request-scoped ID.
-	respCorrelationID := workerResp.CorrelationID
-	if respCorrelationID == "" {
-		respCorrelationID = correlationID
-	}
-
-	resp := &dgw.GatewayResponse{
-		StatusCode:    workerResp.StatusCode,
-		Headers:       workerResp.Headers,
-		Body:          workerResp.Body,
-		CorrelationID: respCorrelationID,
-	}
-	for _, hook := range d.hooks {
-		hook.OnAfterDispatch(ctx, req, resp)
-	}
-
-	// Record circuit breaker result.
-	if workerResp.StatusCode >= 500 {
-		cb.RecordFailure()
-	} else {
-		cb.RecordSuccess()
-	}
-
-	return resp, nil
-}
-
 // sendAndReceive sends the request to the worker and receives the response.
 func (d *Dispatcher) sendAndReceive(ctx context.Context, req *dgw.GatewayRequest, route *dgw.RouteEntry, lc *LifecycleContext, statusCode *int) (*dgw.WorkerResponse, *dgw.GatewayResponse, bool) {
 	correlationID := req.Headers["X-Request-Id"]
 	cb := d.circuit.Get(fmt.Sprintf("%s:%s", req.Method, req.Path))
 
-	// Build IPC request payload.
-	payload, err := json.Marshal(map[string]any{
-		"method":         req.Method,
-		"path":           req.Path,
-		"headers":        req.Headers,
-		"query":          req.Query,
-		"params":         req.Params,
-		"body":           req.Body,
-		"claims":         req.Claims,
-		"correlation_id": correlationID,
-	})
+	payload, err := d.buildIPCPayload(req, correlationID)
 	if err != nil {
 		*statusCode = 500
 		return nil, nil, false
@@ -516,88 +378,113 @@ func (d *Dispatcher) sendAndReceive(ctx context.Context, req *dgw.GatewayRequest
 		Type:    ipc.TypeRequest,
 		Payload: payload,
 	}); err != nil {
-		*statusCode = 502
-		lc.StatusCode = 502
-		lc.Err = fmt.Errorf("gateway: send to worker %s: %w", route.WorkerID, err)
-		lc.Phase = PhasePreDispatch
-		for _, hook := range d.hooks {
-			hook.OnWorkerError(ctx, route.WorkerID, req, lc.Err)
-		}
-		cb.RecordFailure()
-		return nil, nil, false
+		return d.handleSendError(ctx, req, route, lc, statusCode, err, cb)
 	}
 
-	// Wait for the worker response.
 	respMsg, err := d.transport.ReceiveResponse(dispatchCtx, route.WorkerID)
 	if err != nil {
-		if dispatchCtx.Err() != nil {
-			*statusCode = 504
-			lc.StatusCode = 504
-			lc.Err = dgw.ErrUpstreamTimeout
-			lc.Phase = PhasePostDispatch
-		} else {
-			*statusCode = 502
-			lc.StatusCode = 502
-			lc.Err = fmt.Errorf("gateway: receive from worker %s: %w", route.WorkerID, err)
-			lc.Phase = PhasePostDispatch
-		}
-		for _, hook := range d.hooks {
-			hook.OnWorkerError(ctx, route.WorkerID, req, lc.Err)
-		}
-		cb.RecordFailure()
-		return nil, nil, false
+		return d.handleReceiveError(ctx, req, route, lc, statusCode, err, dispatchCtx, cb)
 	}
 
 	if respMsg.Type == ipc.TypeError {
+		return d.handleWorkerError(ctx, req, route, lc, statusCode, respMsg, cb)
+	}
+
+	return d.decodeWorkerResponse(respMsg, correlationID)
+}
+
+// buildIPCPayload builds the IPC request payload.
+func (d *Dispatcher) buildIPCPayload(req *dgw.GatewayRequest, correlationID string) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"method":         req.Method,
+		"path":           req.Path,
+		"headers":        req.Headers,
+		"query":          req.Query,
+		"params":         req.Params,
+		"body":           req.Body,
+		"claims":         req.Claims,
+		"correlation_id": correlationID,
+	})
+}
+
+// handleSendError handles errors when sending to the worker fails.
+func (d *Dispatcher) handleSendError(ctx context.Context, req *dgw.GatewayRequest, route *dgw.RouteEntry, lc *LifecycleContext, statusCode *int, err error, cb *circuit.Breaker) (*dgw.WorkerResponse, *dgw.GatewayResponse, bool) {
+	*statusCode = 502
+	lc.StatusCode = 502
+	lc.Err = fmt.Errorf("gateway: send to worker %s: %w", route.WorkerID, err)
+	lc.Phase = PhasePreDispatch
+	for _, hook := range d.hooks {
+		hook.OnWorkerError(ctx, route.WorkerID, req, lc.Err)
+	}
+	cb.RecordFailure()
+	return nil, nil, false
+}
+
+// handleReceiveError handles errors when receiving from the worker fails.
+func (d *Dispatcher) handleReceiveError(ctx context.Context, req *dgw.GatewayRequest, route *dgw.RouteEntry, lc *LifecycleContext, statusCode *int, err error, dispatchCtx context.Context, cb *circuit.Breaker) (*dgw.WorkerResponse, *dgw.GatewayResponse, bool) {
+	if dispatchCtx.Err() != nil {
+		*statusCode = 504
+		lc.StatusCode = 504
+		lc.Err = dgw.ErrUpstreamTimeout
+		lc.Phase = PhasePostDispatch
+	} else {
 		*statusCode = 502
 		lc.StatusCode = 502
-		lc.Err = fmt.Errorf("worker error: %s", string(respMsg.Payload))
-		for _, hook := range d.hooks {
-			hook.OnWorkerError(ctx, route.WorkerID, req, lc.Err)
-		}
-		cb.RecordFailure()
-		return nil, &dgw.GatewayResponse{
-			StatusCode:    502,
-			Body:          respMsg.Payload,
-			CorrelationID: correlationID,
-		}, false
+		lc.Err = fmt.Errorf("gateway: receive from worker %s: %w", route.WorkerID, err)
+		lc.Phase = PhasePostDispatch
 	}
+	for _, hook := range d.hooks {
+		hook.OnWorkerError(ctx, route.WorkerID, req, lc.Err)
+	}
+	cb.RecordFailure()
+	return nil, nil, false
+}
 
-	// Decode the structured worker response envelope (#39).
+// handleWorkerError handles error responses from the worker.
+func (d *Dispatcher) handleWorkerError(ctx context.Context, req *dgw.GatewayRequest, route *dgw.RouteEntry, lc *LifecycleContext, statusCode *int, respMsg ipc.Message, cb *circuit.Breaker) (*dgw.WorkerResponse, *dgw.GatewayResponse, bool) {
+	*statusCode = 502
+	lc.StatusCode = 502
+	lc.Err = fmt.Errorf("worker error: %s", string(respMsg.Payload))
+	for _, hook := range d.hooks {
+		hook.OnWorkerError(ctx, route.WorkerID, req, lc.Err)
+	}
+	cb.RecordFailure()
+	return nil, &dgw.GatewayResponse{
+		StatusCode:    502,
+		Body:          respMsg.Payload,
+		CorrelationID: req.Headers["X-Request-Id"],
+	}, false
+}
+
+// decodeWorkerResponse decodes the worker response.
+func (d *Dispatcher) decodeWorkerResponse(respMsg ipc.Message, correlationID string) (*dgw.WorkerResponse, *dgw.GatewayResponse, bool) {
 	var workerResp dgw.WorkerResponse
 	if err := json.Unmarshal(respMsg.Payload, &workerResp); err != nil {
-		// Fallback: treat raw payload as 200 body for backwards compatibility.
-		*statusCode = 200
-		resp := &dgw.GatewayResponse{
-			StatusCode:    200,
-			Body:          respMsg.Payload,
-			CorrelationID: correlationID,
-		}
-		for _, hook := range d.hooks {
-			hook.OnAfterDispatch(ctx, req, resp)
-		}
-		return nil, resp, false
+		return d.handleDecodeError(respMsg, correlationID)
 	}
-
 	if workerResp.StatusCode == 0 {
 		workerResp.StatusCode = 200
 	}
-
 	return &workerResp, nil, true
 }
 
+// handleDecodeError handles errors when decoding the worker response.
+func (d *Dispatcher) handleDecodeError(respMsg ipc.Message, correlationID string) (*dgw.WorkerResponse, *dgw.GatewayResponse, bool) {
+	resp := &dgw.GatewayResponse{
+		StatusCode:    200,
+		Body:          respMsg.Payload,
+		CorrelationID: correlationID,
+	}
+	return nil, resp, false
+}
+
 // processWorkerResponse processes the worker response and returns the final gateway response.
-func (d *Dispatcher) processWorkerResponse(ctx context.Context, req *dgw.GatewayRequest, workerResp *dgw.WorkerResponse, lc *LifecycleContext, statusCode *int, correlationID string) (*dgw.GatewayResponse, error) {
+func (d *Dispatcher) processWorkerResponse(ctx context.Context, req *dgw.GatewayRequest, workerResp *dgw.WorkerResponse, lc *LifecycleContext, statusCode *int, correlationID string) *dgw.GatewayResponse {
 	*statusCode = workerResp.StatusCode
 	lc.StatusCode = workerResp.StatusCode
 	lc.Phase = PhasePostDispatch
 
-	// Resolve the final correlation ID (#52):
-	// prefer the one echoed by the worker; fall back to the request-scoped ID.
-	respCorrelationID := workerResp.CorrelationID
-	if respCorrelationID == "" {
-		respCorrelationID = correlationID
-	}
+	respCorrelationID := d.resolveCorrelationID(workerResp.CorrelationID, correlationID)
 
 	resp := &dgw.GatewayResponse{
 		StatusCode:    workerResp.StatusCode,
@@ -609,15 +496,26 @@ func (d *Dispatcher) processWorkerResponse(ctx context.Context, req *dgw.Gateway
 		hook.OnAfterDispatch(ctx, req, resp)
 	}
 
-	// Record circuit breaker result.
+	d.recordCircuitBreakerResult(req, workerResp.StatusCode)
+	return resp
+}
+
+// resolveCorrelationID returns the worker's correlation ID or falls back to the request's.
+func (d *Dispatcher) resolveCorrelationID(workerCorrelationID, requestCorrelationID string) string {
+	if workerCorrelationID != "" {
+		return workerCorrelationID
+	}
+	return requestCorrelationID
+}
+
+// recordCircuitBreakerResult records success or failure in the circuit breaker.
+func (d *Dispatcher) recordCircuitBreakerResult(req *dgw.GatewayRequest, statusCode int) {
 	cb := d.circuit.Get(fmt.Sprintf("%s:%s", req.Method, req.Path))
-	if workerResp.StatusCode >= 500 {
+	if statusCode >= 500 {
 		cb.RecordFailure()
 	} else {
 		cb.RecordSuccess()
 	}
-
-	return resp, nil
 }
 
 // hasRequiredRole returns true if the caller holds at least one required role.
