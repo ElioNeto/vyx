@@ -8,8 +8,8 @@
  *   npx tsx scripts/workflow-agent.ts <workflow.yml> [job-id] [--dry-run]
  *
  * Exemplos:
+ *   npx tsx scripts/workflow-agent.ts .github/workflows/ci.yml
  *   npx tsx scripts/workflow-agent.ts .github/workflows/ci.yml go-test
- *   npx tsx scripts/workflow-agent.ts .github/workflows/ci.yml          # todos os jobs
  *   npx tsx scripts/workflow-agent.ts .github/workflows/ci.yml go-test --dry-run
  */
 import fs from 'node:fs';
@@ -18,9 +18,6 @@ import os from 'node:os';
 import { spawn } from 'node:child_process';
 import YAML from 'yaml';
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 type Step = {
   name?: string;
   run?: string;
@@ -41,18 +38,17 @@ type Job = {
 
 type Workflow = { jobs?: Record<string, Job> };
 
-// ---------------------------------------------------------------------------
-// Jobs com dependências de secrets/serviços externos — pular localmente
-// ---------------------------------------------------------------------------
+// Jobs que requerem secrets/serviços externos — pulados localmente
 const SKIP_JOBS = new Set([
+  'sonarcloud',
   'secrets-scan',
   'semgrep',
-  'sonarcloud',
+  'codeql',
+  'snyk',
+  'dependabot',
+  'gitleaks',
 ]);
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 function emit(event: Record<string, unknown>): void {
   process.stdout.write(JSON.stringify({ ts: new Date().toISOString(), ...event }) + os.EOL);
 }
@@ -62,9 +58,9 @@ function mergeEnv(...parts: Array<Record<string, string> | undefined>): Record<s
 }
 
 function resolveContainer(job: Job): string {
-  if (!job.container) return 'ubuntu:22.04';
+  if (!job.container) return 'golang:1.22';
   if (typeof job.container === 'string') return job.container;
-  return job.container.image ?? 'ubuntu:22.04';
+  return job.container.image ?? 'golang:1.22';
 }
 
 function readWorkflow(file: string): Workflow {
@@ -72,9 +68,6 @@ function readWorkflow(file: string): Workflow {
   return YAML.parse(raw) as Workflow;
 }
 
-// ---------------------------------------------------------------------------
-// Runner via Docker
-// ---------------------------------------------------------------------------
 async function runStepInDocker(opts: {
   image: string;
   projectRoot: string;
@@ -88,7 +81,7 @@ async function runStepInDocker(opts: {
 
   const args = [
     'run', '--rm',
-    '--network', 'none',
+    '--network', 'host',
     '-v', `${opts.projectRoot}:/workspace`,
     '-w', '/workspace',
     ...Object.entries(opts.env).flatMap(([k, v]) => ['-e', `${k}=${v}`]),
@@ -113,9 +106,6 @@ async function runStepInDocker(opts: {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Job runner
-// ---------------------------------------------------------------------------
 async function runJob(
   jobId: string,
   job: Job,
@@ -142,7 +132,6 @@ async function runJob(
         type: 'step_dry_run',
         job: jobId,
         step: step.name ?? `step_${i + 1}`,
-        shell,
         command: step.run,
         workingDir: step['working-directory'] ?? job.defaults?.run?.['working-directory'] ?? '.',
       });
@@ -181,9 +170,6 @@ async function runJob(
   return 0;
 }
 
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');
@@ -222,7 +208,6 @@ async function main(): Promise<void> {
     type: 'workflow_finished',
     status: failures === 0 ? 'success' : 'failed',
     failures,
-    skipped: [...SKIP_JOBS].filter((j) => selected.some(([id]) => id === j)),
   });
 
   process.exit(failures === 0 ? 0 : 1);

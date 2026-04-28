@@ -2,7 +2,7 @@
   "name": "vyx-scripts",
   "version": "1.0.0",
   "private": true,
-  "description": "Scripts de suporte ao delivery-loop do OpenCode",
+  "description": "Scripts de suporte ao delivery-loop do OpenCode no vyx",
   "scripts": {
     "workflow-agent": "tsx workflow-agent.ts",
     "check-todos": "tsx check-todos.ts"
