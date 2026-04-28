@@ -17,6 +17,11 @@ import (
 	"github.com/ElioNeto/vyx/core/application/lifecycle"
 )
 
+const (
+	// HeaderCorrelationID is the HTTP header used to propagate correlation IDs.
+	HeaderCorrelationID = "X-Request-Id"
+)
+
 // JWTValidator extracts and verifies a raw JWT string, returning the claims.
 type JWTValidator interface {
 	Validate(token string) (*dgw.Claims, error)
@@ -187,11 +192,11 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 
 // initCorrelationID initializes or generates a correlation ID for the request.
 func (d *Dispatcher) initCorrelationID(req *dgw.GatewayRequest) string {
-	correlationID := req.Headers["X-Request-Id"]
+	correlationID := req.Headers[HeaderCorrelationID]
 	if correlationID == "" {
 		correlationID = uuid.NewString()
 	}
-	req.Headers["X-Request-Id"] = correlationID
+	req.Headers[HeaderCorrelationID] = correlationID
 	return correlationID
 }
 
@@ -236,7 +241,7 @@ func (d *Dispatcher) checkCircuitBreaker(ctx context.Context, req *dgw.GatewayRe
 			StatusCode:    503,
 			Headers:       map[string]string{"Retry-After": "30"},
 			Body:          []byte(fmt.Sprintf(`{"error":"circuit breaker open","state":"%s"}`, state)),
-			CorrelationID: req.Headers["X-Request-Id"],
+			CorrelationID: req.Headers[HeaderCorrelationID],
 		}, false
 	}
 	return nil, true
@@ -248,7 +253,7 @@ func (d *Dispatcher) runRouteMatchHooks(ctx context.Context, req *dgw.GatewayReq
 		l.OnRouteMatch(lc)
 		if resp, aborted := lc.EarlyResponse(); aborted {
 			*statusCode = resp.StatusCode
-			resp.CorrelationID = req.Headers["X-Request-Id"]
+			resp.CorrelationID = req.Headers[HeaderCorrelationID]
 			return resp, false
 		}
 	}
@@ -266,7 +271,7 @@ func (d *Dispatcher) checkDrainStatus(ctx context.Context, req *dgw.GatewayReque
 			StatusCode:    503,
 			Headers:       map[string]string{"Retry-After": "1"},
 			Body:          []byte(`{"error":"worker draining"}`),
-			CorrelationID: req.Headers["X-Request-Id"],
+			CorrelationID: req.Headers[HeaderCorrelationID],
 		}, false
 	}
 	return nil, true
@@ -362,7 +367,7 @@ func (d *Dispatcher) runPreDispatchHooks(ctx context.Context, req *dgw.GatewayRe
 
 // sendAndReceive sends the request to the worker and receives the response.
 func (d *Dispatcher) sendAndReceive(ctx context.Context, req *dgw.GatewayRequest, route *dgw.RouteEntry, lc *LifecycleContext, statusCode *int) (*dgw.WorkerResponse, *dgw.GatewayResponse, bool) {
-	correlationID := req.Headers["X-Request-Id"]
+	correlationID := req.Headers[HeaderCorrelationID]
 	cb := d.circuit.Get(fmt.Sprintf("%s:%s", req.Method, req.Path))
 
 	payload, err := d.buildIPCPayload(req, correlationID)
@@ -383,7 +388,16 @@ func (d *Dispatcher) sendAndReceive(ctx context.Context, req *dgw.GatewayRequest
 
 	respMsg, err := d.transport.ReceiveResponse(dispatchCtx, route.WorkerID)
 	if err != nil {
-		return d.handleReceiveError(ctx, req, route, lc, statusCode, err, dispatchCtx, cb)
+		return d.handleReceiveError(receiveErrorConfig{
+			Ctx:         ctx,
+			Req:         req,
+			Route:       route,
+			Lc:          lc,
+			StatusCode:  statusCode,
+			Err:         err,
+			DispatchCtx: dispatchCtx,
+			Cb:          cb,
+		})
 	}
 
 	if respMsg.Type == ipc.TypeError {
@@ -420,23 +434,35 @@ func (d *Dispatcher) handleSendError(ctx context.Context, req *dgw.GatewayReques
 	return nil, nil, false
 }
 
+// receiveErrorConfig holds parameters for handleReceiveError.
+type receiveErrorConfig struct {
+	Ctx         context.Context
+	Req         *dgw.GatewayRequest
+	Route       *dgw.RouteEntry
+	Lc          *LifecycleContext
+	StatusCode  *int
+	Err         error
+	DispatchCtx context.Context
+	Cb          *circuit.Breaker
+}
+
 // handleReceiveError handles errors when receiving from the worker fails.
-func (d *Dispatcher) handleReceiveError(ctx context.Context, req *dgw.GatewayRequest, route *dgw.RouteEntry, lc *LifecycleContext, statusCode *int, err error, dispatchCtx context.Context, cb *circuit.Breaker) (*dgw.WorkerResponse, *dgw.GatewayResponse, bool) {
-	if dispatchCtx.Err() != nil {
-		*statusCode = 504
-		lc.StatusCode = 504
-		lc.Err = dgw.ErrUpstreamTimeout
-		lc.Phase = PhasePostDispatch
+func (d *Dispatcher) handleReceiveError(cfg receiveErrorConfig) (*dgw.WorkerResponse, *dgw.GatewayResponse, bool) {
+	if cfg.DispatchCtx.Err() != nil {
+		*cfg.StatusCode = 504
+		cfg.Lc.StatusCode = 504
+		cfg.Lc.Err = dgw.ErrUpstreamTimeout
+		cfg.Lc.Phase = PhasePostDispatch
 	} else {
-		*statusCode = 502
-		lc.StatusCode = 502
-		lc.Err = fmt.Errorf("gateway: receive from worker %s: %w", route.WorkerID, err)
-		lc.Phase = PhasePostDispatch
+		*cfg.StatusCode = 502
+		cfg.Lc.StatusCode = 502
+		cfg.Lc.Err = fmt.Errorf("gateway: receive from worker %s: %w", cfg.Route.WorkerID, cfg.Err)
+		cfg.Lc.Phase = PhasePostDispatch
 	}
 	for _, hook := range d.hooks {
-		hook.OnWorkerError(ctx, route.WorkerID, req, lc.Err)
+		hook.OnWorkerError(cfg.Ctx, cfg.Route.WorkerID, cfg.Req, cfg.Lc.Err)
 	}
-	cb.RecordFailure()
+	cfg.Cb.RecordFailure()
 	return nil, nil, false
 }
 
@@ -452,7 +478,7 @@ func (d *Dispatcher) handleWorkerError(ctx context.Context, req *dgw.GatewayRequ
 	return nil, &dgw.GatewayResponse{
 		StatusCode:    502,
 		Body:          respMsg.Payload,
-		CorrelationID: req.Headers["X-Request-Id"],
+		CorrelationID: req.Headers[HeaderCorrelationID],
 	}, false
 }
 

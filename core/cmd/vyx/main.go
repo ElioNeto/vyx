@@ -597,7 +597,21 @@ func runServer(devMode, withTUI bool) {
 
 	ctx, stop := setupSignalHandling()
 	defer stop()
-	startServices(ctx, devMode, mux.mux, cfg, service, transport, cfgLoader, hbSender, hbReceiver, healthMonitor, httpServer, gwCfg, log)
+	startServices(startServicesConfig{
+		Ctx:           ctx,
+		DevMode:       devMode,
+		Mux:           mux.mux,
+		Cfg:           cfg,
+		Service:       service,
+		Transport:     transport,
+		CfgLoader:     cfgLoader,
+		HbSender:      hbSender,
+		HbReceiver:    hbReceiver,
+		HealthMonitor: healthMonitor,
+		HttpServer:    httpServer,
+		GwCfg:         gwCfg,
+		Log:           log,
+	})
 
 	waitForShutdown(ctx, log, httpServer, transport, service)
 }
@@ -766,56 +780,59 @@ func setupSignalHandling() (context.Context, context.CancelFunc) {
 	return ctx, stop
 }
 
+// startServicesConfig holds parameters for startServices to reduce parameter count.
+type startServicesConfig struct {
+	Ctx           context.Context
+	DevMode       bool
+	Mux           *ilog.Multiplexer
+	Cfg           *doamincfg.Config
+	Service       *lifecycle.Service
+	Transport     ipc.Transport
+	CfgLoader     *infracfg.Loader
+	HbSender      *heartbeat.Sender
+	HbReceiver    *heartbeat.Receiver
+	HealthMonitor *monitor.Monitor
+	HttpServer    *infragw.Server
+	GwCfg         infragw.Config
+	Log           *zap.Logger
+}
+
 // startServices starts all background services and spawns workers.
-func startServices(
-	ctx context.Context,
-	devMode bool,
-	mux *ilog.Multiplexer,
-	cfg *doamincfg.Config,
-	service *lifecycle.Service,
-	transport ipc.Transport,
-	cfgLoader *infracfg.Loader,
-	hbSender *heartbeat.Sender,
-	hbReceiver *heartbeat.Receiver,
-	healthMonitor *monitor.Monitor,
-	httpServer *infragw.Server,
-	gwCfg infragw.Config,
-	log *zap.Logger,
-) {
-	if devMode {
-		log.Info("vyx core starting in DEV mode", zap.String("addr", gwCfg.Addr))
+func startServices(cfg startServicesConfig) {
+	if cfg.DevMode {
+		cfg.Log.Info("vyx core starting in DEV mode", zap.String("addr", cfg.GwCfg.Addr))
 	} else {
-		log.Info("vyx core starting", zap.String("addr", gwCfg.Addr))
+		cfg.Log.Info("vyx core starting", zap.String("addr", cfg.GwCfg.Addr))
 	}
 
-	if mux != nil {
+	if cfg.Mux != nil {
 		go func() {
-			if err := tui.Run(mux); err != nil {
-				log.Error("tui exited with error", zap.Error(err))
+			if err := tui.Run(cfg.Mux); err != nil {
+				cfg.Log.Error("tui exited with error", zap.Error(err))
 			}
 		}()
 	}
 
-	if devMode {
-		go hotReloadWatcher(ctx, os.Getenv("VYX_CONFIG"), cfg.Workers, service, log)
+	if cfg.DevMode {
+		go hotReloadWatcher(cfg.Ctx, os.Getenv("VYX_CONFIG"), cfg.Cfg.Workers, cfg.Service, cfg.Log)
 	}
 
-	spawnWorkers(ctx, cfg, service, transport, log, hbReceiver)
+	spawnWorkers(cfg.Ctx, cfg.Cfg, cfg.Service, cfg.Transport, cfg.Log, cfg.HbReceiver)
 
-	go healthMonitor.Run(ctx)
-	go cfgLoader.WatchSIGHUP(ctx)
-	go hbSender.Run(ctx)
-	go hbReceiver.Run(ctx)
+	go cfg.HealthMonitor.Run(cfg.Ctx)
+	go cfg.CfgLoader.WatchSIGHUP(cfg.Ctx)
+	go cfg.HbSender.Run(cfg.Ctx)
+	go cfg.HbReceiver.Run(cfg.Ctx)
 
 	go func() {
 		var srvErr error
-		if gwCfg.TLSCertFile != "" {
-			srvErr = httpServer.ListenAndServeTLS(gwCfg.TLSCertFile, gwCfg.TLSKeyFile)
+		if cfg.GwCfg.TLSCertFile != "" {
+			srvErr = cfg.HttpServer.ListenAndServeTLS(cfg.GwCfg.TLSCertFile, cfg.GwCfg.TLSKeyFile)
 		} else {
-			srvErr = httpServer.ListenAndServe()
+			srvErr = cfg.HttpServer.ListenAndServe()
 		}
 		if srvErr != nil && srvErr.Error() != "http: Server closed" {
-			log.Error("HTTP server stopped", zap.Error(srvErr))
+			cfg.Log.Error("HTTP server stopped", zap.Error(srvErr))
 		}
 	}()
 }
@@ -839,7 +856,16 @@ func spawnWorker(ctx context.Context, wcfg doamincfg.WorkerConfig, service *life
 	}
 	for i := 0; i < replicas; i++ {
 		workerID := buildWorkerID(wcfg.ID, i, replicas)
-		spawnWorkerInstance(ctx, workerID, wcfg, service, transport, socketDir, log, hbReceiver)
+		spawnWorkerInstance(spawnWorkerInstanceConfig{
+			Ctx:         ctx,
+			WorkerID:    workerID,
+			Wcfg:        wcfg,
+			Service:     service,
+			Transport:   transport,
+			SocketDir:   socketDir,
+			Log:         log,
+			HbReceiver:  hbReceiver,
+		})
 	}
 }
 
@@ -851,45 +877,57 @@ func buildWorkerID(baseID string, index, replicas int) string {
 	return baseID
 }
 
+// spawnWorkerInstanceConfig holds parameters for spawnWorkerInstance.
+type spawnWorkerInstanceConfig struct {
+	Ctx         context.Context
+	WorkerID    string
+	Wcfg        doamincfg.WorkerConfig
+	Service     *lifecycle.Service
+	Transport   ipc.Transport
+	SocketDir   string
+	Log         *zap.Logger
+	HbReceiver  *heartbeat.Receiver
+}
+
 // spawnWorkerInstance spawns a single worker instance.
-func spawnWorkerInstance(ctx context.Context, workerID string, wcfg doamincfg.WorkerConfig, service *lifecycle.Service, transport ipc.Transport, socketDir string, log *zap.Logger, hbReceiver *heartbeat.Receiver) {
-	if err := transport.Register(ctx, workerID); err != nil {
-		log.Error("failed to register IPC socket for worker",
-			zap.String("worker_id", workerID), zap.Error(err))
+func spawnWorkerInstance(cfg spawnWorkerInstanceConfig) {
+	if err := cfg.Transport.Register(cfg.Ctx, cfg.WorkerID); err != nil {
+		cfg.Log.Error("failed to register IPC socket for worker",
+			zap.String("worker_id", cfg.WorkerID), zap.Error(err))
 		return
 	}
 
-	cmd, cmdArgs := prepareWorkerCommand(wcfg, workerID, socketDir)
-	workDir := resolveWorkerDir(wcfg, os.Getenv("VYX_CONFIG"))
+	cmd, cmdArgs := prepareWorkerCommand(cfg.Wcfg, cfg.WorkerID, cfg.SocketDir)
+	workDir := resolveWorkerDir(cfg.Wcfg, os.Getenv("VYX_CONFIG"))
 
-	spawnCtx, spawnCancel := createSpawnContext(ctx, wcfg.StartupTimeout)
+	spawnCtx, spawnCancel := createSpawnContext(cfg.Ctx, cfg.Wcfg.StartupTimeout)
 	defer spawnCancel()
 
 	vyxDir := getVyxDir()
-	w, err := service.SpawnWorker(ctx, lifecycle.SpawnWorkerConfig{
-		ID:              workerID,
+	w, err := cfg.Service.SpawnWorker(cfg.Ctx, lifecycle.SpawnWorkerConfig{
+		ID:              cfg.WorkerID,
 		Command:         cmd,
 		Args:            cmdArgs,
 		WorkDir:         workDir,
-		ShutdownTimeout: wcfg.ShutdownTimeout,
-		RuntimeVersion:  wcfg.RuntimeVersion,
+		ShutdownTimeout: cfg.Wcfg.ShutdownTimeout,
+		RuntimeVersion:  cfg.Wcfg.RuntimeVersion,
 		VyxDir:          vyxDir,
 	})
 	if err != nil {
-		log.Error("failed to spawn worker",
-			zap.String("worker_id", workerID),
-			zap.String("command", wcfg.Command),
+		cfg.Log.Error("failed to spawn worker",
+			zap.String("worker_id", cfg.WorkerID),
+			zap.String("command", cfg.Wcfg.Command),
 			zap.Error(err),
 		)
 		return
 	}
-	log.Info("worker spawned",
+	cfg.Log.Info("worker spawned",
 		zap.String("worker_id", w.ID),
-		zap.String("command", wcfg.Command),
+		zap.String("command", cfg.Wcfg.Command),
 	)
 
-	waitForWorkerHandshake(spawnCtx, workerID, transport, service, log)
-	startWorkerHeartbeat(ctx, w.ID, hbReceiver, log)
+	waitForWorkerHandshake(spawnCtx, cfg.WorkerID, cfg.Transport, cfg.Service, cfg.Log)
+	startWorkerHeartbeat(cfg.Ctx, w.ID, cfg.HbReceiver, cfg.Log)
 }
 
 // prepareWorkerCommand prepares the command and arguments for a worker.
@@ -923,7 +961,9 @@ func createSpawnContext(ctx context.Context, startupTimeout time.Duration) (cont
 	if startupTimeout > 0 {
 		return context.WithTimeout(ctx, startupTimeout)
 	}
-	return ctx, func() {}
+	return ctx, func() {
+		// No-op: no timeout was set, so there is nothing to cancel.
+	}
 }
 
 // getVyxDir returns the VYX_DIR environment variable or default.
@@ -960,7 +1000,7 @@ func waitForShutdown(ctx context.Context, log *zap.Logger, httpServer *infragw.S
 	<-ctx.Done()
 	log.Info("vyx core shutting down — draining workers")
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
