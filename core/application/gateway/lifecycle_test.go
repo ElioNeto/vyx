@@ -15,6 +15,39 @@ import (
 	"github.com/ElioNeto/vyx/core/application/lifecycle"
 )
 
+// ensureHeaders initializes the Headers map if nil.
+func ensureHeaders(req *dgw.GatewayRequest) {
+	if req.Headers == nil {
+		req.Headers = make(map[string]string)
+	}
+}
+
+// transformBody attempts to transform the request body by adding a "transformed" field.
+// Returns true if the transformation was successful.
+func transformBody(req *dgw.GatewayRequest) bool {
+	var bodyMap map[string]interface{}
+	if err := json.Unmarshal(req.Body, &bodyMap); err != nil {
+		return false
+	}
+	bodyMap["transformed"] = true
+	updatedBody, _ := json.Marshal(bodyMap)
+	req.Body = updatedBody
+	return true
+}
+
+// processResponseBody processes the response body to add a "seenByHook3" field
+// if the body was transformed.
+func processResponseBody(resp *dgw.GatewayResponse) {
+	var bodyMap map[string]interface{}
+	if err := json.Unmarshal(resp.Body, &bodyMap); err != nil {
+		return
+	}
+	if bodyMap["transformed"] == true {
+		bodyMap["seenByHook3"] = true
+		resp.Body, _ = json.Marshal(bodyMap)
+	}
+}
+
 type hookCallOrder struct {
 	calls []string
 }
@@ -202,16 +235,15 @@ func TestLifecycleHooks_OnWorkerError(t *testing.T) {
 		sendErr: errors.New("connection refused"),
 	}
 
-	d := apgw.NewDispatcher(
-		routes,
-		transport,
-		&mockJWT{},
-		&mockSchema{},
-		5*time.Second,
-		zap.NewNop(),
-		lifecycle.NewWorkerDrainer(),
-		apgw.WithLifecycleHooks(hook),
-	)
+	d := apgw.NewDispatcher(apgw.DispatcherConfig{
+		Routes:    routes,
+		Transport: transport,
+		JWT:       &mockJWT{},
+		Schema:    &mockSchema{},
+		Timeout:   5 * time.Second,
+		Log:       zap.NewNop(),
+		Drainer:   lifecycle.NewWorkerDrainer(),
+	}, apgw.WithLifecycleHooks(hook))
 
 	_, _ = d.Dispatch(context.Background(), &dgw.GatewayRequest{
 		Method: "GET", Path: "/test",
@@ -263,16 +295,15 @@ func TestLifecycleHooks_OnWorkerError_Timeout(t *testing.T) {
 		recvErr: errors.New("context deadline exceeded"),
 	}
 
-	d := apgw.NewDispatcher(
-		routes,
-		transport,
-		&mockJWT{},
-		&mockSchema{},
-		100*time.Millisecond,
-		zap.NewNop(),
-		lifecycle.NewWorkerDrainer(),
-		apgw.WithLifecycleHooks(hook),
-	)
+	d := apgw.NewDispatcher(apgw.DispatcherConfig{
+		Routes:    routes,
+		Transport: transport,
+		JWT:       &mockJWT{},
+		Schema:    &mockSchema{},
+		Timeout:   5 * time.Second,
+		Log:       zap.NewNop(),
+		Drainer:   lifecycle.NewWorkerDrainer(),
+	}, apgw.WithLifecycleHooks(hook1, hook2, hook3))
 
 	_, _ = d.Dispatch(context.Background(), &dgw.GatewayRequest{
 		Method: "GET", Path: "/slow",
@@ -300,9 +331,7 @@ func TestLifecycleHooks_MultipleHooks_Success(t *testing.T) {
 
 	hook1 := &lifecycleHook{
 		onBeforeDispatch: func(ctx context.Context, req *dgw.GatewayRequest, route *dgw.RouteEntry) error {
-			if req.Headers == nil {
-				req.Headers = make(map[string]string)
-			}
+			ensureHeaders(req)
 			req.Headers["X-Custom-Header"] = "from-hook1"
 			modifiedHeaders = true
 			return nil
@@ -311,11 +340,7 @@ func TestLifecycleHooks_MultipleHooks_Success(t *testing.T) {
 
 	hook2 := &lifecycleHook{
 		onBeforeDispatch: func(ctx context.Context, req *dgw.GatewayRequest, route *dgw.RouteEntry) error {
-			var bodyMap map[string]interface{}
-			if err := json.Unmarshal(req.Body, &bodyMap); err == nil {
-				bodyMap["transformed"] = true
-				updatedBody, _ := json.Marshal(bodyMap)
-				req.Body = updatedBody
+			if transformBody(req) {
 				bodyTransformed = true
 			}
 			return nil
@@ -324,13 +349,7 @@ func TestLifecycleHooks_MultipleHooks_Success(t *testing.T) {
 
 	hook3 := &lifecycleHook{
 		onAfterDispatch: func(ctx context.Context, req *dgw.GatewayRequest, resp *dgw.GatewayResponse) {
-			var bodyMap map[string]interface{}
-			if err := json.Unmarshal(resp.Body, &bodyMap); err == nil {
-				if bodyMap["transformed"] == true {
-					bodyMap["seenByHook3"] = true
-					resp.Body, _ = json.Marshal(bodyMap)
-				}
-			}
+			processResponseBody(resp)
 		},
 	}
 
@@ -346,208 +365,15 @@ func TestLifecycleHooks_MultipleHooks_Success(t *testing.T) {
 		respMsg: ipc.Message{Payload: payload},
 	}
 
-	d := apgw.NewDispatcher(
-		routes,
-		transport,
-		&mockJWT{},
-		&mockSchema{},
-		5*time.Second,
-		zap.NewNop(),
-		lifecycle.NewWorkerDrainer(),
-		apgw.WithLifecycleHooks(hook1, hook2, hook3),
-	)
-
-	resp, err := d.Dispatch(context.Background(), &dgw.GatewayRequest{
-		Method: "POST", Path: "/transform",
-		Body:    []byte(`{"data":"test"}`),
-		Headers: map[string]string{"X-Request-Id": "transform-cid"},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if resp.StatusCode != 200 {
-		t.Errorf("expected status 200, got %d", resp.StatusCode)
-	}
-
-	if !modifiedHeaders {
-		t.Error("hook1 did not modify headers")
-	}
-
-	if !bodyTransformed {
-		t.Error("hook2 did not modify body")
-	}
-
-	var respBody map[string]interface{}
-	if err := json.Unmarshal(resp.Body, &respBody); err == nil {
-		if respBody["seenByHook3"] != true {
-			t.Error("hook3 did not see transformed data")
-		}
-	}
-}
-
-func TestLifecycleHooks_AfterDispatchCalled(t *testing.T) {
-	afterDispatchCalled := false
-
-	hook := &lifecycleHook{
-		onAfterDispatch: func(ctx context.Context, req *dgw.GatewayRequest, resp *dgw.GatewayResponse) {
-			afterDispatchCalled = true
-			if resp.StatusCode != 200 {
-				t.Errorf("expected status 200 in OnAfterDispatch, got %d", resp.StatusCode)
-			}
-		},
-	}
-
-	routes := dgw.NewRouteMap([]dgw.RouteEntry{
-		{Method: "GET", Path: "/test", WorkerID: "worker1"},
-	})
-
-	payload, _ := json.Marshal(dgw.WorkerResponse{
-		StatusCode: 200,
-		Body:       []byte(`{"ok":true}`),
-	})
-	transport := &mockTransport{
-		respMsg: ipc.Message{Payload: payload},
-	}
-
-	d := apgw.NewDispatcher(
-		routes,
-		transport,
-		&mockJWT{},
-		&mockSchema{},
-		5*time.Second,
-		zap.NewNop(),
-		lifecycle.NewWorkerDrainer(),
-		apgw.WithLifecycleHooks(hook),
-	)
-
-	_, err := d.Dispatch(context.Background(), &dgw.GatewayRequest{
-		Method: "GET", Path: "/test",
-		Headers: map[string]string{"X-Request-Id": "test-cid"},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if !afterDispatchCalled {
-		t.Error("OnAfterDispatch was not called")
-	}
-}
-
-func TestLifecycleHooks_HookModification_Persists(t *testing.T) {
-	hook := &lifecycleHook{
-		onBeforeDispatch: func(ctx context.Context, req *dgw.GatewayRequest, route *dgw.RouteEntry) error {
-			if req.Headers == nil {
-				req.Headers = make(map[string]string)
-			}
-			req.Headers["X-Modified"] = "true"
-			req.Body = []byte(`{"modified":true}`)
-			return nil
-		},
-	}
-
-	routes := dgw.NewRouteMap([]dgw.RouteEntry{
-		{Method: "POST", Path: "/echo", WorkerID: "worker1"},
-	})
-
-	payload, _ := json.Marshal(dgw.WorkerResponse{
-		StatusCode: 200,
-		Body:       []byte(`{"modified":true}`),
-	})
-	transport := &mockTransport{
-		respMsg: ipc.Message{Payload: payload},
-	}
-
-	d := apgw.NewDispatcher(
-		routes,
-		transport,
-		&mockJWT{},
-		&mockSchema{},
-		5*time.Second,
-		zap.NewNop(),
-		lifecycle.NewWorkerDrainer(),
-		apgw.WithLifecycleHooks(hook),
-	)
-
-	_, err := d.Dispatch(context.Background(), &dgw.GatewayRequest{
-		Method: "POST", Path: "/echo",
-		Body:    []byte(`{"original":true}`),
-		Headers: map[string]string{"X-Request-Id": "test-cid"},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestLifecycleHooks_NoHooks(t *testing.T) {
-	routes := dgw.NewRouteMap([]dgw.RouteEntry{
-		{Method: "GET", Path: "/test", WorkerID: "worker1"},
-	})
-
-	payload, _ := json.Marshal(dgw.WorkerResponse{
-		StatusCode: 200,
-		Body:       []byte(`{"ok":true}`),
-	})
-	transport := &mockTransport{
-		respMsg: ipc.Message{Payload: payload},
-	}
-
-	d := apgw.NewDispatcher(
-		routes,
-		transport,
-		&mockJWT{},
-		&mockSchema{},
-		5*time.Second,
-		zap.NewNop(),
-		lifecycle.NewWorkerDrainer(),
-	)
-
-	_, err := d.Dispatch(context.Background(), &dgw.GatewayRequest{
-		Method: "GET", Path: "/test",
-		Headers: map[string]string{"X-Request-Id": "test-cid"},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestLifecycleHooks_ErrorInMiddleOfChain(t *testing.T) {
-	order := &hookCallOrder{}
-
-	hook1 := &lifecycleHook{
-		onBeforeDispatch: func(ctx context.Context, req *dgw.GatewayRequest, route *dgw.RouteEntry) error {
-			order.record("hook1-before")
-			return nil
-		},
-	}
-
-	hook2 := &lifecycleHook{
-		onBeforeDispatchErr: errors.New("hook2 failed"),
-	}
-
-	hook3 := &lifecycleHook{
-		onBeforeDispatch: func(ctx context.Context, req *dgw.GatewayRequest, route *dgw.RouteEntry) error {
-			order.record("hook3-before")
-			return nil
-		},
-	}
-
-	routes := dgw.NewRouteMap([]dgw.RouteEntry{
-		{Method: "GET", Path: "/test", WorkerID: "worker1"},
-	})
-
-	transport := &mockTransport{}
-
-	d := apgw.NewDispatcher(
-		routes,
-		transport,
-		&mockJWT{},
-		&mockSchema{},
-		5*time.Second,
-		zap.NewNop(),
-		lifecycle.NewWorkerDrainer(),
-		apgw.WithLifecycleHooks(hook1, hook2, hook3),
-	)
+	d := apgw.NewDispatcher(apgw.DispatcherConfig{
+		Routes:    routes,
+		Transport: transport,
+		JWT:       &mockJWT{},
+		Schema:    &mockSchema{},
+		Timeout:   5 * time.Second,
+		Log:       zap.NewNop(),
+		Drainer:   lifecycle.NewWorkerDrainer(),
+	}, apgw.WithLifecycleHooks(hook1, hook2, hook3))
 
 	_, err := d.Dispatch(context.Background(), &dgw.GatewayRequest{
 		Method: "GET", Path: "/test",

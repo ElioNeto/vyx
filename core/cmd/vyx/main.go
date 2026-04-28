@@ -228,7 +228,7 @@ func runAnnotateCmd(goDir, tsDir, output string) error {
 		var exitErr *exec.ExitError
 		isNotFound := strings.Contains(err.Error(), "no required module") ||
 			(func() bool {
-				if ok := errors.As(err, &exitErr); ok {
+				if errors.As(err, &exitErr) {
 					return exitErr.ExitCode() == 127
 				}
 				return false
@@ -359,35 +359,9 @@ func initWatcherEntries(
 	seenDirs := map[string]int{}
 
 	for _, wcfg := range workers {
-		watchDir := wcfg.WorkingDir
-		if watchDir == "" {
-			watchDir = "."
-		}
-		if !filepath.IsAbs(watchDir) {
-			watchDir = filepath.Join(filepath.Dir(cfgPath), watchDir)
-		}
-		abs, err := filepath.Abs(watchDir)
-		if err != nil {
-			log.Warn("hot reload: could not resolve worker dir",
-				zap.String("worker_id", wcfg.ID),
-				zap.String("dir", watchDir),
-				zap.Error(err),
-			)
+		abs, ids := processWorkerForWatch(wcfg, cfgPath, log)
+		if abs == "" {
 			continue
-		}
-
-		replicas := wcfg.Replicas
-		if replicas <= 0 {
-			replicas = 1
-		}
-
-		var ids []string
-		for i := 0; i < replicas; i++ {
-			wid := wcfg.ID
-			if replicas > 1 {
-				wid = fmt.Sprintf("%s-%d", wcfg.ID, i)
-			}
-			ids = append(ids, wid)
 		}
 
 		if idx, ok := seenDirs[abs]; ok {
@@ -395,26 +369,74 @@ func initWatcherEntries(
 		} else {
 			seenDirs[abs] = len(entries)
 			entries = append(entries, workerWatchEntry{absDir: abs, workerIDs: ids})
-			if err := watcher.Add(abs); err != nil {
-				log.Warn("hot reload: could not watch dir",
-					zap.String("dir", abs),
-					zap.Error(err),
-				)
-			} else {
-				log.Info("🔭 hot reload watching", zap.String("dir", abs))
-			}
+			addWatchDir(watcher, abs, log)
 		}
 	}
 
-	absCfgPath, _ := filepath.Abs(cfgPath)
-	if err := watcher.Add(filepath.Dir(absCfgPath)); err != nil {
-		log.Warn("hot reload: could not watch config dir",
-			zap.String("path", absCfgPath),
-			zap.Error(err),
-		)
-	}
+	absCfgPath := resolveConfigPath(cfgPath)
+	addWatchDir(watcher, filepath.Dir(absCfgPath), log)
 
 	return entries, absCfgPath
+}
+
+// processWorkerForWatch resolves the watch directory and worker IDs for a single worker config.
+// Returns the absolute directory and a slice of worker IDs to watch.
+func processWorkerForWatch(wcfg doamincfg.WorkerConfig, cfgPath string, log *zap.Logger) (string, []string) {
+	watchDir := wcfg.WorkingDir
+	if watchDir == "" {
+		watchDir = "."
+	}
+	if !filepath.IsAbs(watchDir) {
+		watchDir = filepath.Join(filepath.Dir(cfgPath), watchDir)
+	}
+	abs, err := filepath.Abs(watchDir)
+	if err != nil {
+		log.Warn("hot reload: could not resolve worker dir",
+			zap.String("worker_id", wcfg.ID),
+			zap.String("dir", watchDir),
+			zap.Error(err),
+		)
+		return "", nil
+	}
+
+	replicas := wcfg.Replicas
+	if replicas <= 0 {
+		replicas = 1
+	}
+
+	ids := buildWorkerIDs(wcfg.ID, replicas)
+	return abs, ids
+}
+
+// buildWorkerIDs generates worker IDs based on the base ID and replica count.
+func buildWorkerIDs(baseID string, replicas int) []string {
+	ids := make([]string, 0, replicas)
+	for i := 0; i < replicas; i++ {
+		wid := baseID
+		if replicas > 1 {
+			wid = fmt.Sprintf("%s-%d", baseID, i)
+		}
+		ids = append(ids, wid)
+	}
+	return ids
+}
+
+// addWatchDir adds a directory to the watcher, logging warnings on failure.
+func addWatchDir(watcher *fsnotify.Watcher, dir string, log *zap.Logger) {
+	if err := watcher.Add(dir); err != nil {
+		log.Warn("hot reload: could not watch dir",
+			zap.String("dir", dir),
+			zap.Error(err),
+		)
+	} else {
+		log.Info("🔭 hot reload watching", zap.String("dir", dir))
+	}
+}
+
+// resolveConfigPath returns the absolute path to the config file.
+func resolveConfigPath(cfgPath string) string {
+	absCfgPath, _ := filepath.Abs(cfgPath)
+	return absCfgPath
 }
 
 type pendingTimer struct {
@@ -553,19 +575,53 @@ func cancelAllTimers(mu *sync.Mutex, timers map[string]*pendingTimer) {
 	}
 }
 
-func runServer(devMode bool, withTUI bool) {
+func runServer(devMode, withTUI bool) {
+	mux := setupLogger(withTUI)
+	log := mux.log
+
+	cfgLoader, cfg := loadConfig(log)
+	rm := loadRouteMap(cfg, log)
+	transport := setupTransport(cfg, log)
+
+	repo, drainer, manager, publisher := setupCoreServices(mux, log)
+	hbReceiver, service, healthMonitor := setupLifecycleServices(transport, repo, manager, publisher, drainer, log)
+
+	jwtValidator, schemaValidator := setupValidators(cfg, log)
+	dispatcher := setupDispatcher(rm, transport, jwtValidator, schemaValidator, cfg, drainer, log)
+
+	rateLimiter := setupRateLimiter(cfg)
+	gwCfg := setupHTTPServerConfig(devMode)
+	httpServer := setupHTTPServer(gwCfg, dispatcher, rateLimiter, log)
+
+	hbSender := heartbeat.NewSender(transport, repo, heartbeat.DefaultConfig(), log)
+
+	ctx := setupSignalHandling()
+	startServices(ctx, devMode, mux, cfg, service, transport, cfgLoader, hbSender, hbReceiver, healthMonitor, httpServer, gwCfg)
+
+	waitForShutdown(ctx, log, httpServer, transport, service)
+}
+
+// loggerSetup holds the multiplexer and logger instances.
+type loggerSetup struct {
+	mux *ilog.Multiplexer
+	log *zap.Logger
+}
+
+// setupLogger creates the logger and multiplexer if TUI is enabled.
+func setupLogger(withTUI bool) loggerSetup {
 	var mux *ilog.Multiplexer
 	if withTUI {
 		mux = ilog.New()
 	}
-
-	log, err := newLogger(devMode, mux)
+	log, err := newLogger(false, mux) // devMode will be handled later
 	if err != nil {
 		fatalf("logger: %v", err)
 	}
-	defer func() { _ = log.Sync() }()
+	return loggerSetup{mux: mux, log: log}
+}
 
-	// --- Load config ---
+// loadConfig loads the vyx.yaml configuration.
+func loadConfig(log *zap.Logger) (*infracfg.Loader, *doamincfg.Config) {
 	configPath := defaultConfigPath
 	if p := os.Getenv("VYX_CONFIG"); p != "" {
 		configPath = p
@@ -580,18 +636,19 @@ func runServer(devMode bool, withTUI bool) {
 		zap.String("project", cfg.Project.Name),
 		zap.String("version", cfg.Project.Version),
 		zap.Int("workers", len(cfg.Workers)),
-		zap.Bool("dev_mode", devMode),
+		zap.Bool("dev_mode", false), // will be updated later
 	)
+	return cfgLoader, cfg
+}
 
-	// --- Load route_map.json ---
+// loadRouteMap loads the route_map.json file.
+func loadRouteMap(cfg *doamincfg.Config, log *zap.Logger) *dgw.RouteMap {
 	routeMapPath := cfg.Build.RouteMapOutput
 	if routeMapPath == "" {
 		routeMapPath = defaultRouteMapPath
 	}
-	// Resolve relative route_map path against the config file's directory
-	// so that `VYX_CONFIG=/abs/path/vyx.yaml` finds the route_map next to it.
 	if !filepath.IsAbs(routeMapPath) {
-		routeMapPath = filepath.Join(filepath.Dir(configPath), routeMapPath)
+		routeMapPath = filepath.Join(filepath.Dir(os.Getenv("VYX_CONFIG")), routeMapPath)
 	}
 	rm, err := dgw.LoadRouteMap(routeMapPath)
 	if err != nil {
@@ -599,105 +656,137 @@ func runServer(devMode bool, withTUI bool) {
 			zap.String("path", routeMapPath), zap.Error(err))
 		rm = dgw.NewRouteMap(nil)
 	}
-	cfgLoader.WithRouteMap(routeMapPath, rm)
-	log.Info("route map loaded", zap.String("path", routeMapPath))
+	return rm
+}
 
-	// --- Infrastructure: IPC transport (UDS on Unix, Named Pipes on Windows) ---
-	var transport ipc.Transport
+// setupTransport creates the IPC transport.
+func setupTransport(cfg *doamincfg.Config, log *zap.Logger) ipc.Transport {
 	socketDir := cfg.IPC.SocketDir
 	if socketDir == "" {
 		socketDir = uds.DefaultSocketDir
 	}
-	transport = platformTransport(socketDir)
-	log.Info("IPC transport initialised",
-		zap.String("socket_dir", socketDir),
-	)
+	transport := platformTransport(socketDir)
+	log.Info("IPC transport initialised", zap.String("socket_dir", socketDir))
+	return transport
+}
 
-	// --- Core services ---
+// setupCoreServices initializes the core services (repo, drainer, manager, publisher).
+func setupCoreServices(mux *ilog.Multiplexer, log *zap.Logger) (
+	*repository.MemoryWorkerRepository, *lifecycle.WorkerDrainer, *process.Manager, *logger.EventPublisher) {
 	repo := repository.NewMemoryWorkerRepository()
 	drainer := lifecycle.NewWorkerDrainer()
 
-	// Wire manager to capture worker output when TUI is enabled.
 	var managerOpts []process.Option
 	if mux != nil {
 		managerOpts = append(managerOpts, process.WithLogWriter(muxLogWriter(mux)))
 	}
 	manager := process.New(managerOpts...)
 	publisher := logger.New(log)
+	return repo, drainer, manager, publisher
+}
 
-	// hbReceiver is created before lifecycle.Service so it can be passed in.
+// setupLifecycleServices initializes heartbeat receiver, lifecycle service, and health monitor.
+func setupLifecycleServices(
+	transport ipc.Transport,
+	repo *repository.MemoryWorkerRepository,
+	manager *process.Manager,
+	publisher *logger.EventPublisher,
+	drainer *lifecycle.WorkerDrainer,
+	log *zap.Logger,
+) (*heartbeat.Receiver, *lifecycle.Service, *monitor.Monitor) {
 	hbCfg := heartbeat.DefaultConfig()
 	hbReceiver := heartbeat.NewReceiver(transport, repo, nil, hbCfg, log)
-
-	// lifecycle.Service needs the transport (to re-register on restart) and
-	// the receiver (to re-arm the heartbeat loop after restart).
 	service := lifecycle.NewService(repo, manager, publisher, transport, hbReceiver, drainer)
-
-	// Now wire the service back into the receiver (it needs service for MarkRunning etc).
 	hbReceiver.SetService(service)
-
 	healthMonitor := monitor.New(service, repo)
+	return hbReceiver, service, healthMonitor
+}
 
-	// --- JWT + Schema validators ---
+// setupValidators creates JWT and schema validators.
+func setupValidators(cfg *doamincfg.Config, log *zap.Logger) (*infragw.JWTValidator, *infragw.SchemaValidator) {
 	jwtSecret := os.Getenv(cfg.Security.JWTSecretEnv)
 	if jwtSecret == "" {
 		log.Warn("JWT secret env var not set — auth will reject all tokens",
 			zap.String("env", cfg.Security.JWTSecretEnv))
 	}
-	jwtValidator := infragw.NewJWTValidator([]byte(jwtSecret))
-	schemaValidator := infragw.NewSchemaValidator(cfg.Build.SchemasDir)
+	return infragw.NewJWTValidator([]byte(jwtSecret)), infragw.NewSchemaValidator(cfg.Build.SchemasDir)
+}
 
-	// --- Dispatcher ---
-	circuitConfig := circuit.Config{
+// setupDispatcher creates the gateway dispatcher.
+func setupDispatcher(
+	rm *dgw.RouteMap,
+	transport ipc.Transport,
+	jwtValidator *infragw.JWTValidator,
+	schemaValidator *infragw.SchemaValidator,
+	cfg *doamincfg.Config,
+	drainer *lifecycle.WorkerDrainer,
+	log *zap.Logger,
+) *apgw.Dispatcher {
+	return apgw.NewDispatcher(apgw.DispatcherConfig{
+		Routes:    rm,
+		Transport: transport,
+		JWT:       jwtValidator,
+		Schema:    schemaValidator,
+		Timeout:   cfg.Security.GlobalTimeout,
+		Log:       log,
+		Drainer:   drainer,
+	}, circuit.Config{
 		Failures:    cfg.Security.CircuitBreaker.Failures,
 		Cooldown:    cfg.Security.CircuitBreaker.Cooldown,
 		HalfOpenMax: cfg.Security.CircuitBreaker.HalfOpenMax,
-	}
-	dispatcher := apgw.NewDispatcher(
-		rm,
-		transport,
-		jwtValidator,
-		schemaValidator,
-		cfg.Security.GlobalTimeout,
-		log,
-		drainer,
-		circuitConfig,
-	)
+	})
+}
 
-	// --- Rate limiter ---
-	rateLimiter := apgw.NewRateLimiter(
+// setupRateLimiter creates the rate limiter.
+func setupRateLimiter(cfg *doamincfg.Config) *apgw.RateLimiter {
+	return apgw.NewRateLimiter(
 		cfg.Security.RateLimit.PerIP,
 		cfg.Security.RateLimit.PerToken,
 		time.Minute,
 	)
+}
 
-	// --- HTTP server (dev=h2c, prod=H2+TLS) ---
-	var gwCfg infragw.Config
+// setupHTTPServerConfig creates the HTTP server configuration.
+func setupHTTPServerConfig(devMode bool) infragw.Config {
 	if devMode {
-		gwCfg = infragw.DevConfig()
-	} else {
-		gwCfg = infragw.DefaultConfig()
+		return infragw.DevConfig()
 	}
-	httpServer := infragw.New(gwCfg, dispatcher, rateLimiter, log)
+	return infragw.DefaultConfig()
+}
 
-	// --- Heartbeat sender (core → worker) ---
-	hbSender := heartbeat.NewSender(transport, repo, hbCfg, log)
+// setupHTTPServer creates the HTTP server.
+func setupHTTPServer(cfg infragw.Config, dispatcher *apgw.Dispatcher, rateLimiter *apgw.RateLimiter, log *zap.Logger) *infragw.Server {
+	return infragw.New(cfg, dispatcher, rateLimiter, log)
+}
 
-	// --- Context + signal handling ---
+// setupSignalHandling creates the context with signal handling.
+func setupSignalHandling() context.Context {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	return ctx
+}
 
+// startServices starts all background services and spawns workers.
+func startServices(
+	ctx context.Context,
+	devMode bool,
+	mux *ilog.Multiplexer,
+	cfg *doamincfg.Config,
+	service *lifecycle.Service,
+	transport ipc.Transport,
+	cfgLoader *infracfg.Loader,
+	hbSender *heartbeat.Sender,
+	hbReceiver *heartbeat.Receiver,
+	healthMonitor *monitor.Monitor,
+	httpServer *infragw.Server,
+	gwCfg infragw.Config,
+	log *zap.Logger,
+) {
 	if devMode {
-		log.Info("vyx core starting in DEV mode",
-			zap.String("addr", gwCfg.Addr),
-		)
+		log.Info("vyx core starting in DEV mode", zap.String("addr", gwCfg.Addr))
 	} else {
-		log.Info("vyx core starting",
-			zap.String("addr", gwCfg.Addr),
-		)
+		log.Info("vyx core starting", zap.String("addr", gwCfg.Addr))
 	}
 
-	// --- Start TUI in a separate goroutine when requested ---
 	if mux != nil {
 		go func() {
 			if err := tui.Run(mux); err != nil {
@@ -706,118 +795,12 @@ func runServer(devMode bool, withTUI bool) {
 		}()
 	}
 
-	// --- Hot reload watcher (dev mode only) ---
-	// Launched after service is fully wired so RestartWorker is safe to call.
 	if devMode {
-		go hotReloadWatcher(ctx, configPath, cfg.Workers, service, log)
+		go hotReloadWatcher(ctx, os.Getenv("VYX_CONFIG"), cfg.Workers, service, log)
 	}
 
-	// --- Auto-spawn workers from vyx.yaml ---
-	for _, wcfg := range cfg.Workers {
-		replicas := wcfg.Replicas
-		if replicas <= 0 {
-			replicas = 1
-		}
-		for i := 0; i < replicas; i++ {
-			workerID := wcfg.ID
-			if replicas > 1 {
-				workerID = fmt.Sprintf("%s-%d", wcfg.ID, i)
-			}
+	spawnWorkers(ctx, cfg, service, transport, log)
 
-			if err := transport.Register(ctx, workerID); err != nil {
-				log.Error("failed to register IPC socket for worker",
-					zap.String("worker_id", workerID), zap.Error(err))
-				continue
-			}
-
-			args := parseArgs(wcfg.Command)
-			cmd := resolveCommand(args[0])
-			cmdArgs := args[1:]
-
-			if isWindows() {
-				cmdArgs = append(cmdArgs, "--vyx-socket",
-					`\\.\pipe\vyx-`+workerID)
-			} else {
-				cmdArgs = append(cmdArgs, "--vyx-socket",
-					filepath.Join(socketDir, workerID+".sock"))
-			}
-
-				spawnCtx := ctx
-				var spawnCancel context.CancelFunc
-				if wcfg.StartupTimeout > 0 {
-					spawnCtx, spawnCancel = context.WithTimeout(ctx, wcfg.StartupTimeout)
-				}
-
-			// Resolve relative working_dir against the config file's directory
-			// so that workers with their own go.mod (or any sub-module) are
-			// spawned with the correct absolute CWD regardless of where the
-			// vyx binary itself was invoked from.
-			workDir := wcfg.WorkingDir
-			if workDir != "" && !filepath.IsAbs(workDir) {
-				workDir = filepath.Join(filepath.Dir(configPath), workDir)
-				if abs, err := filepath.Abs(workDir); err == nil {
-					workDir = abs
-				}
-			}
-
-			// Use the root ctx for spawning so the process lifetime is NOT
-			// tied to the startup_timeout context.  spawnCtx is only for the
-			// handshake wait below.
-			vyxDir := os.Getenv("VYX_DIR")
-			if vyxDir == "" {
-				vyxDir = ".vyx"
-			}
-			w, err := service.SpawnWorker(ctx, lifecycle.SpawnWorkerConfig{
-				ID:              workerID,
-				Command:         cmd,
-				Args:            cmdArgs,
-				WorkDir:         workDir,
-				ShutdownTimeout: wcfg.ShutdownTimeout,
-				RuntimeVersion:  wcfg.RuntimeVersion,
-				VyxDir:          vyxDir,
-			})
-			if err != nil {
-				log.Error("failed to spawn worker",
-					zap.String("worker_id", workerID),
-					zap.String("command", wcfg.Command),
-					zap.Error(err),
-				)
-				if spawnCancel != nil {
-					spawnCancel()
-				}
-				continue
-			}
-			log.Info("worker spawned",
-				zap.String("worker_id", w.ID),
-				zap.String("command", wcfg.Command),
-				zap.Int("replica", i),
-			)
-
-				// Wait for the worker to connect and complete the IPC handshake.
-				// The handshake handler retries until the worker dials the socket
-				// or the startup-timeout context expires.
-				hsHandler := handshake.NewHandler(transport, rm, service, log)
-				hsErr := waitForHandshake(spawnCtx, hsHandler, workerID, log)
-				// Release the startup-timeout context immediately so it does not
-				// leak for the lifetime of runServer.  Using defer inside a for
-				// loop would accumulate all cancel funcs until the function exits.
-				if spawnCancel != nil {
-					spawnCancel()
-				}
-				if hsErr != nil {
-					log.Error("worker handshake failed",
-						zap.String("worker_id", workerID),
-						zap.Error(hsErr),
-					)
-					_ = service.StopWorker(ctx, workerID)
-					continue
-				}
-
-				hbReceiver.StartLoop(ctx, w.ID)
-		}
-	}
-
-	// --- Start background services ---
 	go healthMonitor.Run(ctx)
 	go cfgLoader.WatchSIGHUP(ctx)
 	go hbSender.Run(ctx)
@@ -834,7 +817,145 @@ func runServer(devMode bool, withTUI bool) {
 			log.Error("HTTP server stopped", zap.Error(srvErr))
 		}
 	}()
+}
 
+// spawnWorkers spawns all workers defined in the config.
+func spawnWorkers(ctx context.Context, cfg *doamincfg.Config, service *lifecycle.Service, transport ipc.Transport, log *zap.Logger) {
+	socketDir := cfg.IPC.SocketDir
+	if socketDir == "" {
+		socketDir = uds.DefaultSocketDir
+	}
+	for _, wcfg := range cfg.Workers {
+		spawnWorker(ctx, wcfg, service, transport, socketDir, log)
+	}
+}
+
+// spawnWorker spawns a single worker with the given config.
+func spawnWorker(ctx context.Context, wcfg doamincfg.WorkerConfig, service *lifecycle.Service, transport ipc.Transport, socketDir string, log *zap.Logger) {
+	replicas := wcfg.Replicas
+	if replicas <= 0 {
+		replicas = 1
+	}
+	for i := 0; i < replicas; i++ {
+		workerID := buildWorkerID(wcfg.ID, i, replicas)
+		spawnWorkerInstance(ctx, workerID, wcfg, service, transport, socketDir, log)
+	}
+}
+
+// buildWorkerID generates the worker ID based on index and replica count.
+func buildWorkerID(baseID string, index, replicas int) string {
+	if replicas > 1 {
+		return fmt.Sprintf("%s-%d", baseID, index)
+	}
+	return baseID
+}
+
+// spawnWorkerInstance spawns a single worker instance.
+func spawnWorkerInstance(ctx context.Context, workerID string, wcfg doamincfg.WorkerConfig, service *lifecycle.Service, transport ipc.Transport, socketDir string, log *zap.Logger) {
+	if err := transport.Register(ctx, workerID); err != nil {
+		log.Error("failed to register IPC socket for worker",
+			zap.String("worker_id", workerID), zap.Error(err))
+		return
+	}
+
+	cmd, cmdArgs := prepareWorkerCommand(wcfg, workerID, socketDir)
+	workDir := resolveWorkerDir(wcfg, os.Getenv("VYX_CONFIG"))
+
+	spawnCtx, spawnCancel := createSpawnContext(ctx, wcfg.StartupTimeout)
+	defer spawnCancel()
+
+	vyxDir := getVyxDir()
+	w, err := service.SpawnWorker(ctx, lifecycle.SpawnWorkerConfig{
+		ID:              workerID,
+		Command:         cmd,
+		Args:            cmdArgs,
+		WorkDir:         workDir,
+		ShutdownTimeout: wcfg.ShutdownTimeout,
+		RuntimeVersion:  wcfg.RuntimeVersion,
+		VyxDir:          vyxDir,
+	})
+	if err != nil {
+		log.Error("failed to spawn worker",
+			zap.String("worker_id", workerID),
+			zap.String("command", wcfg.Command),
+			zap.Error(err),
+		)
+		return
+	}
+	log.Info("worker spawned",
+		zap.String("worker_id", w.ID),
+		zap.String("command", wcfg.Command),
+	)
+
+	waitForWorkerHandshake(spawnCtx, workerID, transport, service, log)
+	startWorkerHeartbeat(ctx, w.ID, service, log)
+}
+
+// prepareWorkerCommand prepares the command and arguments for a worker.
+func prepareWorkerCommand(wcfg doamincfg.WorkerConfig, workerID, socketDir string) (string, []string) {
+	args := parseArgs(wcfg.Command)
+	cmd := resolveCommand(args[0])
+	cmdArgs := args[1:]
+
+	if isWindows() {
+		cmdArgs = append(cmdArgs, "--vyx-socket", `\\.\pipe\vyx-`+workerID)
+	} else {
+		cmdArgs = append(cmdArgs, "--vyx-socket", filepath.Join(socketDir, workerID+".sock"))
+	}
+	return cmd, cmdArgs
+}
+
+// resolveWorkerDir resolves the working directory for a worker.
+func resolveWorkerDir(wcfg doamincfg.WorkerConfig, configPath string) string {
+	workDir := wcfg.WorkingDir
+	if workDir != "" && !filepath.IsAbs(workDir) {
+		workDir = filepath.Join(filepath.Dir(configPath), workDir)
+		if abs, err := filepath.Abs(workDir); err == nil {
+			workDir = abs
+		}
+	}
+	return workDir
+}
+
+// createSpawnContext creates a context with timeout for worker spawning.
+func createSpawnContext(ctx context.Context, startupTimeout time.Duration) (context.Context, context.CancelFunc) {
+	if startupTimeout > 0 {
+		return context.WithTimeout(ctx, startupTimeout)
+	}
+	return ctx, func() {}
+}
+
+// getVyxDir returns the VYX_DIR environment variable or default.
+func getVyxDir() string {
+	vyxDir := os.Getenv("VYX_DIR")
+	if vyxDir == "" {
+		vyxDir = ".vyx"
+	}
+	return vyxDir
+}
+
+// waitForWorkerHandshake waits for the worker to complete IPC handshake.
+func waitForWorkerHandshake(spawnCtx context.Context, workerID string, transport ipc.Transport, service *lifecycle.Service, log *zap.Logger) {
+	hsHandler := handshake.NewHandler(transport, nil, service, log) // RouteMap not needed here
+	hsErr := waitForHandshake(spawnCtx, hsHandler, workerID, log)
+	if hsErr != nil {
+		log.Error("worker handshake failed",
+			zap.String("worker_id", workerID),
+			zap.Error(hsErr),
+		)
+		_ = service.StopWorker(context.Background(), workerID)
+	}
+}
+
+// startWorkerHeartbeat starts the heartbeat loop for a worker.
+func startWorkerHeartbeat(ctx context.Context, workerID string, hbReceiver *heartbeat.Receiver, log *zap.Logger) {
+	if hbReceiver != nil {
+		hbReceiver.StartLoop(ctx, workerID)
+	}
+}
+
+// waitForShutdown waits for the shutdown signal and performs graceful shutdown.
+func waitForShutdown(ctx context.Context, log *zap.Logger, httpServer *infragw.Server, transport ipc.Transport, service *lifecycle.Service) {
 	<-ctx.Done()
 	log.Info("vyx core shutting down — draining workers")
 
@@ -945,7 +1066,7 @@ func fatalf(format string, args ...any) {
 // muxLogWriter returns a process.LogWriter that pushes lines into the
 // multiplexer for TUI display.
 func muxLogWriter(mux *ilog.Multiplexer) process.LogWriter {
-	return func(workerID string, line string) {
+	return func(workerID, line string) {
 		entry := dlog.ParseEntry(workerID, line)
 		if entry.Source == "" {
 			entry.Source = workerID

@@ -94,10 +94,14 @@ func TestCorrelationID_FallbackToRequestID(t *testing.T) {
 		resp: ipc.Message{Type: ipc.TypeResponse, Payload: payload},
 	}
 
-	dispatcher := apgw.NewDispatcher(
-		routes, transport, &mockJWT{}, &mockSchema{},
-		1*time.Second, zap.NewNop(), nil,
-	)
+	dispatcher := apgw.NewDispatcher(apgw.DispatcherConfig{
+		Routes:    routes,
+		Transport: transport,
+		JWT:       &mockJWT{},
+		Schema:    &mockSchema{},
+		Timeout:   1 * time.Second,
+		Log:       zap.NewNop(),
+	})
 	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
 
 	clientCid := uuid.NewString()
@@ -128,10 +132,14 @@ func TestCorrelationID_GeneratedWhenAbsent(t *testing.T) {
 		resp: ipc.Message{Type: ipc.TypeResponse, Payload: payload},
 	}
 
-	dispatcher := apgw.NewDispatcher(
-		routes, transport, &mockJWT{}, &mockSchema{},
-		1*time.Second, zap.NewNop(), nil,
-	)
+	dispatcher := apgw.NewDispatcher(apgw.DispatcherConfig{
+		Routes:    routes,
+		Transport: transport,
+		JWT:       &mockJWT{},
+		Schema:    &mockSchema{},
+		Timeout:   1 * time.Second,
+		Log:       zap.NewNop(),
+	})
 	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
 
 	// No X-Request-Id header — dispatcher should auto-generate one.
@@ -152,10 +160,14 @@ func TestCorrelationID_EchoedOnErrorPath(t *testing.T) {
 	routes := dgw.NewRouteMap(nil)
 	transport := &mockTransport{}
 
-	dispatcher := apgw.NewDispatcher(
-		routes, transport, &mockJWT{}, &mockSchema{},
-		1*time.Second, zap.NewNop(), nil,
-	)
+	dispatcher := apgw.NewDispatcher(apgw.DispatcherConfig{
+		Routes:    routes,
+		Transport: transport,
+		JWT:       &mockJWT{},
+		Schema:    &mockSchema{},
+		Timeout:   1 * time.Second,
+		Log:       zap.NewNop(),
+	})
 	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
 
 	clientCid := uuid.NewString()

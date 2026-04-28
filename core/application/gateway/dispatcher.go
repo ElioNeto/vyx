@@ -54,17 +54,8 @@ type DispatcherConfig struct {
 }
 
 // NewDispatcher creates a Dispatcher wired with all required dependencies.
-// For cleaner calls, populate a DispatcherConfig struct.
-func NewDispatcher(
-	routes *dgw.RouteMap,
-	transport ipc.Transport,
-	jwt JWTValidator,
-	schema SchemaValidator,
-	timeout time.Duration,
-	log *zap.Logger,
-	drainer *lifecycle.WorkerDrainer,
-	opts ...interface{},
-) *Dispatcher {
+// Use NewDispatcherFromParams or populate a DispatcherConfig struct for cleaner calls.
+func NewDispatcher(cfg DispatcherConfig, opts ...interface{}) *Dispatcher {
 	var circuitConfig circuit.Config
 	var dispatcherOpts []DispatcherOption
 
@@ -78,7 +69,7 @@ func NewDispatcher(
 	}
 
 	onStateChange := func(sc circuit.StateChange) {
-		log.Info("circuit breaker state change",
+		cfg.Log.Info("circuit breaker state change",
 			zap.String("route_id", sc.RouteID),
 			zap.String("from", sc.From.String()),
 			zap.String("to", sc.To.String()),
@@ -87,14 +78,14 @@ func NewDispatcher(
 		)
 	}
 	d := &Dispatcher{
-		routes:    routes,
-		transport: transport,
-		jwt:       jwt,
-		schema:    schema,
-		timeout:   timeout,
-		log:       log,
-		drainer:   drainer,
-		hooks:     []RequestLifecycle{NewAccessLogLifecycle(log)},
+		routes:    cfg.Routes,
+		transport: cfg.Transport,
+		jwt:       cfg.JWT,
+		schema:    cfg.Schema,
+		timeout:   cfg.Timeout,
+		log:       cfg.Log,
+		drainer:   cfg.Drainer,
+		hooks:     []RequestLifecycle{NewAccessLogLifecycle(cfg.Log)},
 		circuit:   circuit.NewRegistry(circuitConfig, onStateChange),
 	}
 	for _, opt := range dispatcherOpts {
@@ -103,19 +94,10 @@ func NewDispatcher(
 	return d
 }
 
-// NewDispatcherFromParams is an alias for NewDispatcher using a config struct.
-// Use this when you have many parameters to avoid parameter ordering issues.
+// NewDispatcherFromParams is a helper to create a Dispatcher using separate params.
+// Deprecated: Use NewDispatcher with DispatcherConfig instead.
 func NewDispatcherFromParams(cfg DispatcherConfig, circuitConfig circuit.Config, opts ...DispatcherOption) *Dispatcher {
-	return NewDispatcher(
-		cfg.Routes,
-		cfg.Transport,
-		cfg.JWT,
-		cfg.Schema,
-		cfg.Timeout,
-		cfg.Log,
-		cfg.Drainer,
-		circuitConfig,
-	)
+	return NewDispatcher(cfg, circuitConfig, opts)
 }
 
 // DispatcherOption configures a Dispatcher.

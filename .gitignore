@@ -82,3 +82,4 @@ build/
 *.old
 *.swp
 *.swo
+.task-state.json

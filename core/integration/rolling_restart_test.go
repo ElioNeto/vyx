@@ -137,15 +137,15 @@ func TestNoDropsDuringRollingRestart(t *testing.T) {
 
 	rm := buildRouteMap(workerID)
 
-	dispatcher := gateway.NewDispatcher(
-		rm,
-		transport,
-		stubJWT{},
-		stubSchema{},
-		10*time.Second, // dispatch timeout – much larger than holdDuration
-		log,
-		drainer,
-	)
+	dispatcher := gateway.NewDispatcher(apgw.DispatcherConfig{
+		Routes:    rm,
+		Transport: transport,
+		JWT:       stubJWT{},
+		Schema:    stubSchema{},
+		Timeout:   10 * time.Second, // dispatch timeout – much larger than holdDuration
+		Log:       log,
+		Drainer:   drainer,
+	})
 
 	var (
 		ok503  atomic.Int64 // requests correctly rejected after drain start
