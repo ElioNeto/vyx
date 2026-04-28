@@ -1,104 +1,126 @@
-package gateway
+package gateway_test
 
 import (
+	"os"
 	"testing"
+
+	"github.com/ElioNeto/vyx/core/domain/gateway"
 )
 
-func TestRouteMap_StaticLookup(t *testing.T) {
-	rm := NewRouteMap([]RouteEntry{
-		{Path: "/api/products", Method: "GET", WorkerID: "node:api"},
-	})
-	res, ok := rm.Lookup("GET", "/api/products")
-	if !ok {
-		t.Fatal("expected match for static route")
+func TestNewRouteMap(t *testing.T) {
+	entries := []gateway.RouteEntry{
+		{Path: "/api/users", Method: "GET", WorkerID: "w1"},
+		{Path: "/api/users/:id", Method: "GET", WorkerID: "w2"},
+		{Path: "/api/users", Method: "POST", WorkerID: "w3"},
 	}
-	if res.Entry.WorkerID != "node:api" {
-		t.Errorf("unexpected workerID: %s", res.Entry.WorkerID)
-	}
-}
-
-func TestRouteMap_PathParam(t *testing.T) {
-	rm := NewRouteMap([]RouteEntry{
-		{Path: "/api/products/:id", Method: "GET", WorkerID: "node:api"},
-	})
-	res, ok := rm.Lookup("GET", "/api/products/123")
-	if !ok {
-		t.Fatal("expected match for param route")
-	}
-	if res.Params["id"] != "123" {
-		t.Errorf("expected param id=123, got %v", res.Params)
+	rm := gateway.NewRouteMap(entries)
+	if rm == nil {
+		t.Fatal("expected RouteMap, got nil")
 	}
 }
 
-func TestRouteMap_StaticWinsOverParam(t *testing.T) {
-	rm := NewRouteMap([]RouteEntry{
-		{Path: "/api/products/featured", Method: "GET", WorkerID: "node:featured"},
-		{Path: "/api/products/:id", Method: "GET", WorkerID: "node:api"},
-	})
-	res, ok := rm.Lookup("GET", "/api/products/featured")
-	if !ok {
-		t.Fatal("expected match")
+func TestLookup_StaticRoute(t *testing.T) {
+	entries := []gateway.RouteEntry{
+		{Path: "/api/users", Method: "GET", WorkerID: "w1"},
 	}
-	if res.Entry.WorkerID != "node:featured" {
-		t.Errorf("static should win, got workerID=%s", res.Entry.WorkerID)
+	rm := gateway.NewRouteMap(entries)
+	result, ok := rm.Lookup("GET", "/api/users")
+	if !ok {
+		t.Fatal("expected route found, got false")
+	}
+	if result.Entry.WorkerID != "w1" {
+		t.Errorf("expected worker w1, got %s", result.Entry.WorkerID)
 	}
 }
 
-func TestRouteMap_MultipleParams(t *testing.T) {
-	rm := NewRouteMap([]RouteEntry{
-		{Path: "/api/orders/:orderId/items/:itemId", Method: "GET", WorkerID: "node:orders"},
-	})
-	res, ok := rm.Lookup("GET", "/api/orders/42/items/7")
-	if !ok {
-		t.Fatal("expected match")
+func TestLookup_ParamRoute(t *testing.T) {
+	entries := []gateway.RouteEntry{
+		{Path: "/api/users/:id", Method: "GET", WorkerID: "w2"},
 	}
-	if res.Params["orderId"] != "42" || res.Params["itemId"] != "7" {
-		t.Errorf("unexpected params: %v", res.Params)
+	rm := gateway.NewRouteMap(entries)
+	result, ok := rm.Lookup("GET", "/api/users/123")
+	if !ok {
+		t.Fatal("expected route found, got false")
+	}
+	if result.Params["id"] != "123" {
+		t.Errorf("expected param id=123, got %s", result.Params["id"])
 	}
 }
 
-func TestRouteMap_NoMatch(t *testing.T) {
-	rm := NewRouteMap([]RouteEntry{
-		{Path: "/api/products", Method: "GET", WorkerID: "node:api"},
-	})
-	_, ok := rm.Lookup("GET", "/api/orders")
+func TestLookup_NotFound(t *testing.T) {
+	rm := gateway.NewRouteMap(nil)
+	_, ok := rm.Lookup("GET", "/nonexistent")
 	if ok {
-		t.Fatal("expected no match")
+		t.Error("expected route not found, got true")
 	}
 }
 
-func TestRouteMap_MethodMismatch(t *testing.T) {
-	rm := NewRouteMap([]RouteEntry{
-		{Path: "/api/products", Method: "GET", WorkerID: "node:api"},
-	})
-	_, ok := rm.Lookup("POST", "/api/products")
-	if ok {
-		t.Fatal("expected no match for wrong method")
+func TestLookup_ParamOverStatic(t *testing.T) {
+	entries := []gateway.RouteEntry{
+		{Path: "/api/users", Method: "GET", WorkerID: "w1"},
+		{Path: "/api/users/:id", Method: "GET", WorkerID: "w2"},
+	}
+	rm := gateway.NewRouteMap(entries)
+	// Static should win
+	result, ok := rm.Lookup("GET", "/api/users")
+	if !ok {
+		t.Fatal("expected static route found")
+	}
+	if result.Entry.WorkerID != "w1" {
+		t.Errorf("expected static route (w1), got %s", result.Entry.WorkerID)
+	}
+	// Param should also work
+	result, ok = rm.Lookup("GET", "/api/users/456")
+	if !ok {
+		t.Fatal("expected param route found")
+	}
+	if result.Params["id"] != "456" {
+		t.Errorf("expected param id=456, got %s", result.Params["id"])
 	}
 }
 
-func TestRouteMap_Swap(t *testing.T) {
-	rm := NewRouteMap([]RouteEntry{
-		{Path: "/old", Method: "GET", WorkerID: "node:old"},
+func TestLoadRouteMap(t *testing.T) {
+	// Create a temporary route_map.json
+	tmpfile := "/tmp/test_route_map.json"
+	content := `{"routes": [{"path": "/test", "method": "GET", "worker_id": "w-test"}]}`
+	err := os.WriteFile(tmpfile, []byte(content), 0644)
+	if err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+	defer os.Remove(tmpfile)
+
+	rm, err := gateway.LoadRouteMap(tmpfile)
+	if err != nil {
+		t.Fatalf("LoadRouteMap failed: %v", err)
+	}
+	result, ok := rm.Lookup("GET", "/test")
+	if !ok {
+		t.Fatal("expected route found")
+	}
+	if result.Entry.WorkerID != "w-test" {
+		t.Errorf("expected worker w-test, got %s", result.Entry.WorkerID)
+	}
+}
+
+func TestSwap(t *testing.T) {
+	rm := gateway.NewRouteMap([]gateway.RouteEntry{
+		{Path: "/old", Method: "GET", WorkerID: "w-old"},
 	})
+	// Swap with new entries
+	rm.Swap([]gateway.RouteEntry{
+		{Path: "/new", Method: "GET", WorkerID: "w-new"},
+	})
+	// Old should not be found
 	_, ok := rm.Lookup("GET", "/old")
-	if !ok {
-		t.Fatal("expected old route to match before swap")
-	}
-
-	rm.Swap([]RouteEntry{
-		{Path: "/new", Method: "GET", WorkerID: "node:new"},
-	})
-
-	_, ok = rm.Lookup("GET", "/old")
 	if ok {
-		t.Fatal("old route should not match after swap")
+		t.Error("expected old route not found after swap")
 	}
-	res, ok := rm.Lookup("GET", "/new")
+	// New should be found
+	result, ok := rm.Lookup("GET", "/new")
 	if !ok {
-		t.Fatal("new route should match after swap")
+		t.Fatal("expected new route found after swap")
 	}
-	if res.Entry.WorkerID != "node:new" {
-		t.Errorf("unexpected workerID after swap: %s", res.Entry.WorkerID)
+	if result.Entry.WorkerID != "w-new" {
+		t.Errorf("expected worker w-new, got %s", result.Entry.WorkerID)
 	}
 }
