@@ -131,16 +131,15 @@ func TestLifecycleHooks_Ordering(t *testing.T) {
 		respMsg: ipc.Message{Payload: payload},
 	}
 
-	d := apgw.NewDispatcher(
-		routes,
-		transport,
-		&mockJWT{},
-		&mockSchema{},
-		5*time.Second,
-		zap.NewNop(),
-		lifecycle.NewWorkerDrainer(),
-		apgw.WithLifecycleHooks(hook1, hook2, hook3),
-	)
+	d := apgw.NewDispatcher(apgw.DispatcherConfig{
+		Routes:    routes,
+		Transport: transport,
+		JWT:       &mockJWT{},
+		Schema:    &mockSchema{},
+		Timeout:   5 * time.Second,
+		Log:       zap.NewNop(),
+		Drainer:   lifecycle.NewWorkerDrainer(),
+	}, apgw.WithLifecycleHooks(hook1, hook2, hook3))
 
 	_, err := d.Dispatch(context.Background(), &dgw.GatewayRequest{
 		Method: "GET", Path: "/test",
@@ -182,16 +181,15 @@ func TestLifecycleHooks_ErrorShortCircuit(t *testing.T) {
 
 	transport := &mockTransport{}
 
-	d := apgw.NewDispatcher(
-		routes,
-		transport,
-		&mockJWT{},
-		&mockSchema{},
-		5*time.Second,
-		zap.NewNop(),
-		lifecycle.NewWorkerDrainer(),
-		apgw.WithLifecycleHooks(hook),
-	)
+	d := apgw.NewDispatcher(apgw.DispatcherConfig{
+		Routes:    routes,
+		Transport: transport,
+		JWT:       &mockJWT{},
+		Schema:    &mockSchema{},
+		Timeout:   5 * time.Second,
+		Log:       zap.NewNop(),
+		Drainer:   lifecycle.NewWorkerDrainer(),
+	}, apgw.WithLifecycleHooks(hook))
 
 	_, err := d.Dispatch(context.Background(), &dgw.GatewayRequest{
 		Method: "POST", Path: "/users",
@@ -303,7 +301,7 @@ func TestLifecycleHooks_OnWorkerError_Timeout(t *testing.T) {
 		Timeout:   5 * time.Second,
 		Log:       zap.NewNop(),
 		Drainer:   lifecycle.NewWorkerDrainer(),
-	}, apgw.WithLifecycleHooks(hook1, hook2, hook3))
+	}, apgw.WithLifecycleHooks(hook))
 
 	_, _ = d.Dispatch(context.Background(), &dgw.GatewayRequest{
 		Method: "GET", Path: "/slow",
@@ -375,20 +373,31 @@ func TestLifecycleHooks_MultipleHooks_Success(t *testing.T) {
 		Drainer:   lifecycle.NewWorkerDrainer(),
 	}, apgw.WithLifecycleHooks(hook1, hook2, hook3))
 
-	_, err := d.Dispatch(context.Background(), &dgw.GatewayRequest{
-		Method: "GET", Path: "/test",
-		Headers: map[string]string{"X-Request-Id": "test-cid"},
+	resp, err := d.Dispatch(context.Background(), &dgw.GatewayRequest{
+		Method: "POST", Path: "/transform",
+		Body:    []byte(`{"data":"test"}`),
+		Headers: map[string]string{"X-Request-Id": "transform-cid"},
 	})
-
-	if err == nil {
-		t.Fatal("expected error from hook2, got nil")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 
-	calls := order.get()
-	if len(calls) != 1 {
-		t.Fatalf("expected 1 call, got %d: %v", len(calls), calls)
+	if resp.StatusCode != 200 {
+		t.Errorf("expected status 200, got %d", resp.StatusCode)
 	}
-	if calls[0] != "hook1-before" {
-		t.Errorf("expected 'hook1-before', got %q", calls[0])
+
+	if !modifiedHeaders {
+		t.Error("hook1 did not modify headers")
+	}
+
+	if !bodyTransformed {
+		t.Error("hook2 did not modify body")
+	}
+
+	var respBody map[string]interface{}
+	if err := json.Unmarshal(resp.Body, &respBody); err == nil {
+		if respBody["seenByHook3"] != true {
+			t.Error("hook3 did not see transformed data")
+		}
 	}
 }

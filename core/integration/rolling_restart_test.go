@@ -30,10 +30,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ElioNeto/vyx/core/application/gateway"
-	"github.com/ElioNeto/vyx/core/application/lifecycle"
+	apgw "github.com/ElioNeto/vyx/core/application/gateway"
 	dgw "github.com/ElioNeto/vyx/core/domain/gateway"
 	"github.com/ElioNeto/vyx/core/domain/ipc"
+	"github.com/ElioNeto/vyx/core/application/lifecycle"
 	"go.uber.org/zap"
 )
 
@@ -137,7 +137,7 @@ func TestNoDropsDuringRollingRestart(t *testing.T) {
 
 	rm := buildRouteMap(workerID)
 
-	dispatcher := gateway.NewDispatcher(apgw.DispatcherConfig{
+	dispatcher := apgw.NewDispatcher(apgw.DispatcherConfig{
 		Routes:    rm,
 		Transport: transport,
 		JWT:       stubJWT{},

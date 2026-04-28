@@ -1,7 +1,6 @@
 ---
 description: Verifica TODOs e executa os jobs locais do ci.yml do vyx
 agent: delivery-loop
-model: openrouter/big-pickle
 ---
 
 Execute a validação de entrega desta tarefa no projeto vyx.

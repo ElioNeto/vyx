@@ -583,7 +583,7 @@ func runServer(devMode, withTUI bool) {
 	rm := loadRouteMap(cfg, log)
 	transport := setupTransport(cfg, log)
 
-	repo, drainer, manager, publisher := setupCoreServices(mux, log)
+	repo, drainer, manager, publisher := setupCoreServices(mux.mux, log)
 	hbReceiver, service, healthMonitor := setupLifecycleServices(transport, repo, manager, publisher, drainer, log)
 
 	jwtValidator, schemaValidator := setupValidators(cfg, log)
@@ -595,8 +595,9 @@ func runServer(devMode, withTUI bool) {
 
 	hbSender := heartbeat.NewSender(transport, repo, heartbeat.DefaultConfig(), log)
 
-	ctx := setupSignalHandling()
-	startServices(ctx, devMode, mux, cfg, service, transport, cfgLoader, hbSender, hbReceiver, healthMonitor, httpServer, gwCfg)
+	ctx, stop := setupSignalHandling()
+	defer stop()
+	startServices(ctx, devMode, mux.mux, cfg, service, transport, cfgLoader, hbSender, hbReceiver, healthMonitor, httpServer, gwCfg, log)
 
 	waitForShutdown(ctx, log, httpServer, transport, service)
 }
@@ -760,9 +761,9 @@ func setupHTTPServer(cfg infragw.Config, dispatcher *apgw.Dispatcher, rateLimite
 }
 
 // setupSignalHandling creates the context with signal handling.
-func setupSignalHandling() context.Context {
+func setupSignalHandling() (context.Context, context.CancelFunc) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	return ctx
+	return ctx, stop
 }
 
 // startServices starts all background services and spawns workers.
@@ -799,7 +800,7 @@ func startServices(
 		go hotReloadWatcher(ctx, os.Getenv("VYX_CONFIG"), cfg.Workers, service, log)
 	}
 
-	spawnWorkers(ctx, cfg, service, transport, log)
+	spawnWorkers(ctx, cfg, service, transport, log, hbReceiver)
 
 	go healthMonitor.Run(ctx)
 	go cfgLoader.WatchSIGHUP(ctx)
@@ -820,25 +821,25 @@ func startServices(
 }
 
 // spawnWorkers spawns all workers defined in the config.
-func spawnWorkers(ctx context.Context, cfg *doamincfg.Config, service *lifecycle.Service, transport ipc.Transport, log *zap.Logger) {
+func spawnWorkers(ctx context.Context, cfg *doamincfg.Config, service *lifecycle.Service, transport ipc.Transport, log *zap.Logger, hbReceiver *heartbeat.Receiver) {
 	socketDir := cfg.IPC.SocketDir
 	if socketDir == "" {
 		socketDir = uds.DefaultSocketDir
 	}
 	for _, wcfg := range cfg.Workers {
-		spawnWorker(ctx, wcfg, service, transport, socketDir, log)
+		spawnWorker(ctx, wcfg, service, transport, socketDir, log, hbReceiver)
 	}
 }
 
 // spawnWorker spawns a single worker with the given config.
-func spawnWorker(ctx context.Context, wcfg doamincfg.WorkerConfig, service *lifecycle.Service, transport ipc.Transport, socketDir string, log *zap.Logger) {
+func spawnWorker(ctx context.Context, wcfg doamincfg.WorkerConfig, service *lifecycle.Service, transport ipc.Transport, socketDir string, log *zap.Logger, hbReceiver *heartbeat.Receiver) {
 	replicas := wcfg.Replicas
 	if replicas <= 0 {
 		replicas = 1
 	}
 	for i := 0; i < replicas; i++ {
 		workerID := buildWorkerID(wcfg.ID, i, replicas)
-		spawnWorkerInstance(ctx, workerID, wcfg, service, transport, socketDir, log)
+		spawnWorkerInstance(ctx, workerID, wcfg, service, transport, socketDir, log, hbReceiver)
 	}
 }
 
@@ -851,7 +852,7 @@ func buildWorkerID(baseID string, index, replicas int) string {
 }
 
 // spawnWorkerInstance spawns a single worker instance.
-func spawnWorkerInstance(ctx context.Context, workerID string, wcfg doamincfg.WorkerConfig, service *lifecycle.Service, transport ipc.Transport, socketDir string, log *zap.Logger) {
+func spawnWorkerInstance(ctx context.Context, workerID string, wcfg doamincfg.WorkerConfig, service *lifecycle.Service, transport ipc.Transport, socketDir string, log *zap.Logger, hbReceiver *heartbeat.Receiver) {
 	if err := transport.Register(ctx, workerID); err != nil {
 		log.Error("failed to register IPC socket for worker",
 			zap.String("worker_id", workerID), zap.Error(err))
@@ -888,7 +889,7 @@ func spawnWorkerInstance(ctx context.Context, workerID string, wcfg doamincfg.Wo
 	)
 
 	waitForWorkerHandshake(spawnCtx, workerID, transport, service, log)
-	startWorkerHeartbeat(ctx, w.ID, service, log)
+	startWorkerHeartbeat(ctx, w.ID, hbReceiver, log)
 }
 
 // prepareWorkerCommand prepares the command and arguments for a worker.
