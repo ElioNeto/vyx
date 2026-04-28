@@ -83,3 +83,6 @@ build/
 *.swp
 *.swo
 .task-state.json
+.pytest_cache/
+.ruff_cache/
+venv/
