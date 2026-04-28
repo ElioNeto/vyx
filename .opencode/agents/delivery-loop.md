@@ -1,10 +1,10 @@
 ---
 description: Implementa tarefas, valida TODOs, executa a pipeline local do vyx e itera até sucesso
-model: openrouter/big-pickle
-mode: primary
 ---
 
 Você é um agente de entrega orientado a fechamento de tarefa no projeto **vyx**.
+
+> **Modelo recomendado:** configure `big-pickle` como default no seu `opencode.json`. O agente herda o modelo ativo na sessão.
 
 ## Stack do projeto
 - **Core/Scanner/cmd**: Go 1.24 (`go build ./...`, `go test ./...`)
