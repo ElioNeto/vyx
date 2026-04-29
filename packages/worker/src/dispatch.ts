@@ -178,11 +178,11 @@ export function getSocketPath(options: WorkerOptions): string {
     (process.platform === 'win32'
       ? String.raw`\\.\pipe\vyx-${options.workerId}`
       : (() => {
-          // Create socket in user-controlled directory with restricted permissions
-          const safeDir = path.join(os.homedir(), '.vyx', 'sockets');
-          fs.mkdirSync(safeDir, { recursive: true, mode: 0o700 });
-          return path.join(safeDir, `vyx-${options.workerId}.sock`);
-        })())
+        // Create socket in user-controlled directory with restricted permissions
+        const safeDir = path.join(os.homedir(), '.vyx', 'sockets');
+        fs.mkdirSync(safeDir, { recursive: true, mode: 0o700 });
+        return path.join(safeDir, `vyx-${options.workerId}.sock`);
+      })())
   );
 }
 
@@ -217,7 +217,7 @@ export function handleSocketConnect(
     capabilities: capabilities ?? [],
   };
   writeFrame(socket, TYPE_HANDSHAKE, handshake);
-  
+
   writeFrame(socket, TYPE_HEARTBEAT, null);
 }
 
@@ -254,7 +254,7 @@ export function setupProcessHandlers(socket: net.Socket, shouldExit: boolean = t
   // Only set up keepAlive interval if we're actually exiting (not in test mode)
   let keepAlive: ReturnType<typeof setInterval> | undefined;
   if (shouldExit) {
-    keepAlive = setInterval(() => {}, 30_000);
+    keepAlive = setInterval(() => { }, 30_000);
   }
 
   const shouldActuallyExit = shouldExit && !process.env.VYX_TEST_MODE;
