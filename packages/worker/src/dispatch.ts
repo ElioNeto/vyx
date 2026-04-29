@@ -188,26 +188,34 @@ export function getSocketPath(options: WorkerOptions): string {
 
 export function start(options: WorkerOptions): void {
   const socketPath = getSocketPath(options);
+  const socket = createAndSetupSocket(socketPath, options.workerId, options.capabilities);
+  setupProcessHandlers(socket);
+}
 
-  console.log(`[${options.workerId}] connecting to ${socketPath}`);
+export function createAndSetupSocket(
+  socketPath: string,
+  workerId: string,
+  capabilities?: Array<{ path: string; method: string }>
+): net.Socket {
+  console.log(`[${workerId}] connecting to ${socketPath}`);
 
   const socket = net.createConnection(socketPath, () => {
-    console.log(`[${options.workerId}] connected to core`);
+    console.log(`[${workerId}] connected to core`);
 
     const handshake = {
       type: 'handshake',
-      worker_id: options.workerId,
-      capabilities: options.capabilities ?? [],
+      worker_id: workerId,
+      capabilities: capabilities ?? [],
     };
     writeFrame(socket, TYPE_HANDSHAKE, handshake);
-    console.log(`[${options.workerId}] handshake sent`);
+    console.log(`[${workerId}] handshake sent`);
 
     writeFrame(socket, TYPE_HEARTBEAT, null);
-    console.log(`[${options.workerId}] initial heartbeat sent`);
+    console.log(`[${workerId}] initial heartbeat sent`);
   });
 
-  setupSocketHandlers(socket, options.workerId);
-  setupProcessHandlers(socket);
+  setupSocketHandlers(socket, workerId);
+  return socket;
 }
 
 export function setupSocketHandlers(socket: net.Socket, workerId: string): void {
@@ -285,4 +293,4 @@ export function handleSocketData(
 }
 
 // Exported for testing purposes
-export { dispatch, matchRoute, writeFrame, parseFrames };
+export { dispatch, matchRoute, writeFrame, parseFrames, createAndSetupSocket };
