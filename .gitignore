@@ -86,7 +86,6 @@ build/
 .pytest_cache/
 .ruff_cache/
 venv/
-coverage*
 annotate
 cli
 vyx
@@ -94,3 +93,6 @@ hello-world-go-worker
 .coverage
 .geminiignore
 *_coverage.txt
+coverage*.txt
+coverage*.xml
+coverage*.json
