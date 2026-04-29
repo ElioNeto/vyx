@@ -11,16 +11,10 @@
     "todowrite": "allow",
     "task": "allow",
     "webfetch": "allow",
+    "bash": "allow",
     "question": "deny",
     "external_directory": "ask",
-    "doom_loop": "ask",
-    "bash": {
-      "*": "allow",
-      "rm -rf *": "ask",
-      "sudo *": "ask",
-      "git push *": "ask",
-      "git commit *": "ask"
-    }
+    "doom_loop": "ask"
   },
   "mcp": {
     "sonarqube": {
