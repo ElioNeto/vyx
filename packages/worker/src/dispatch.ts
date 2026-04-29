@@ -2,6 +2,9 @@ import net from 'node:net';
 import process from 'node:process';
 import { runInRequestContextAsync } from './context.js';
 import type { IPCPayload, WorkerResponse } from './request.js';
+import os from 'node:os';
+import path from 'node:path';
+import fs from 'node:fs';
 
 const TYPE_REQUEST = 0x01;
 const TYPE_RESPONSE = 0x02;
@@ -176,10 +179,6 @@ export function getSocketPath(options: WorkerOptions): string {
       ? String.raw`\\.\pipe\vyx-${options.workerId}`
       : (() => {
           // Create socket in user-controlled directory with restricted permissions
-          const os = require('node:os') as typeof import('node:os');
-          const path = require('node:path') as typeof import('node:path');
-          const fs = require('node:fs') as typeof import('node:fs');
-
           const safeDir = path.join(os.homedir(), '.vyx', 'sockets');
           fs.mkdirSync(safeDir, { recursive: true, mode: 0o700 });
           return path.join(safeDir, `vyx-${options.workerId}.sock`);
@@ -207,21 +206,28 @@ export function start(options: WorkerOptions): void {
     console.log(`[${options.workerId}] initial heartbeat sent`);
   });
 
+  setupSocketHandlers(socket, options.workerId);
+  setupProcessHandlers(socket);
+}
+
+export function setupSocketHandlers(socket: net.Socket, workerId: string): void {
   const bufferRef: { current: Buffer } = { current: Buffer.alloc(0) };
 
   socket.on('data', (data: Buffer) => {
-    const result = handleSocketData(socket, data, bufferRef, options.workerId);
+    const result = handleSocketData(socket, data, bufferRef, workerId);
     bufferRef.current = result.remaining;
   });
 
   socket.on('error', (err) =>
-    console.error(`[${options.workerId}] socket error:`, err.message)
+    console.error(`[${workerId}] socket error:`, err.message)
   );
   socket.on('close', () => {
-    console.log(`[${options.workerId}] disconnected`);
+    console.log(`[${workerId}] disconnected`);
     process.exit(0);
   });
+}
 
+export function setupProcessHandlers(socket: net.Socket): void {
   const keepAlive = setInterval(() => {}, 30_000);
 
   process.on('SIGTERM', () => {

@@ -84,6 +84,19 @@ describe('index module', () => {
       console.warn = originalWarn;
     });
 
+    it('should produce JSON output for debug', () => {
+      const originalLog = console.log;
+      let output = '';
+      console.log = (msg) => { output = msg; };
+
+      logger.debug('test debug', { key: 'value' });
+
+      expect(output).toContain('"level":"debug"');
+      expect(output).toContain('"message":"test debug"');
+
+      console.log = originalLog;
+    });
+
     it('should include data in output', () => {
       const originalLog = console.log;
       let output = '';

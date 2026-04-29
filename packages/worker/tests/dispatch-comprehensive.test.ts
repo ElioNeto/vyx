@@ -1,4 +1,4 @@
-import { get, post, put, patch, del, dispatch, matchRoute, writeFrame, parseFrames, WorkerOptions } from '../src/dispatch';
+import { get, post, put, patch, del, dispatch, matchRoute, writeFrame, parseFrames, getSocketPath, handleSocketData, HandleSocketDataResult, WorkerOptions } from '../src/dispatch';
 import { createResponse, json, text, error, WorkerResponse } from '../src/request';
 import type { Request, IPCPayload } from '../src/request';
 import net from 'node:net';
@@ -278,6 +278,7 @@ describe('dispatch module - comprehensive coverage', () => {
       const { socket, writes } = createMockSocket();
 
       writeFrame(socket, 0x01, payload);
+      expect(writes.length).toBe(1);
       const writtenBuffer = writes[0];
 
       // Only pass partial buffer
@@ -303,6 +304,115 @@ describe('dispatch module - comprehensive coverage', () => {
       const result = parseFrames(writtenBuffer);
       expect(result.frames).toHaveLength(1);
       expect(result.remaining.length).toBe(0);
+    });
+  });
+
+  describe('getSocketPath function', () => {
+    it('should return custom socketPath if provided', () => {
+      const options: WorkerOptions = {
+        workerId: 'test-worker',
+        socketPath: '/tmp/custom.sock',
+      };
+      const result = getSocketPath(options);
+      expect(result).toBe('/tmp/custom.sock');
+    });
+
+    it('should generate socket path if not provided', () => {
+      const options: WorkerOptions = {
+        workerId: 'test-worker',
+      };
+      const result = getSocketPath(options);
+      expect(result).toContain('.vyx/sockets');
+      expect(result).toContain('vyx-test-worker.sock');
+    });
+  });
+
+  describe('handleSocketData function', () => {
+    it('should handle heartbeat frame', () => {
+      const { socket, writes } = createMockSocket();
+      const bufferRef = { current: Buffer.alloc(0) };
+
+      // Create a heartbeat frame
+      const heartbeatPayload = null;
+      writeFrame(socket, 0x03, heartbeatPayload); // TYPE_HEARTBEAT = 0x03
+      const heartbeatFrame = writes[writes.length - 1];
+
+      // Clear writes and handle the frame
+      writes.length = 0;
+      const result = handleSocketData(socket, heartbeatFrame, bufferRef, 'test-worker');
+
+      // Should respond with heartbeat
+      expect(writes.length).toBe(1);
+      const response = parseFrames(writes[0]);
+      expect(response.frames[0].msgType).toBe(0x03); // TYPE_HEARTBEAT
+    });
+
+    it('should handle request frame and dispatch', async () => {
+      const { socket, writes } = createMockSocket();
+      const bufferRef = { current: Buffer.alloc(0) };
+
+      // Register a route
+      const handler = (req: Request) => createResponse(200, { handled: true });
+      get('/test', handler);
+
+      // Create a request frame
+      const requestPayload: IPCPayload = {
+        method: 'GET',
+        path: '/test',
+        headers: {},
+        query: {},
+        params: {},
+        body: null,
+        claims: null,
+        correlation_id: 'test-request',
+      };
+
+      writes.length = 0;
+      writeFrame(socket, 0x01, requestPayload); // TYPE_REQUEST = 0x01
+      const requestFrame = writes[writes.length - 1];
+
+      writes.length = 0;
+      handleSocketData(socket, requestFrame, bufferRef, 'test-worker');
+
+      // Wait for async dispatch
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Should have written a response
+      expect(writes.length).toBeGreaterThan(0);
+    });
+
+    it('should handle invalid JSON in request frame', () => {
+      const { socket, writes } = createMockSocket();
+      const bufferRef = { current: Buffer.alloc(0) };
+
+      // Create a frame with invalid JSON
+      const invalidPayload = Buffer.from('invalid json');
+      const header = Buffer.alloc(5);
+      header.writeUInt32LE(invalidPayload.length, 0);
+      header.writeUInt8(0x01, 4); // TYPE_REQUEST
+      const invalidFrame = Buffer.concat([header, invalidPayload]);
+
+      writes.length = 0;
+      handleSocketData(socket, invalidFrame, bufferRef, 'test-worker');
+
+      // Should not crash, and buffer should be updated
+      // The function should catch the JSON parse error
+    });
+
+    it('should handle unknown message type', () => {
+      const { socket, writes } = createMockSocket();
+      const bufferRef = { current: Buffer.alloc(0) };
+
+      // Create a frame with unknown type (0x99)
+      const payload = { test: true };
+      writeFrame(socket, 0x99, payload);
+      const unknownFrame = writes[writes.length - 1];
+
+      writes.length = 0;
+      handleSocketData(socket, unknownFrame, bufferRef, 'test-worker');
+
+      // Should not respond to unknown type
+      expect(writes.length).toBe(0);
     });
   });
 
