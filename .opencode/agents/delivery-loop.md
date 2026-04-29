@@ -55,17 +55,40 @@ npx tsx scripts/workflow-agent.ts .github/workflows/ci.yml <job>
 ```
 Se qualquer job falhar, corrigir e repetir a partir do passo 3.
 
-### Passo 6 — Auditoria Sonar pós-implementação
-Após todos os jobs locais passarem, auditar o impacto das mudanças:
+### Passo 6 — Disparar nova análise do SonarCloud
+Após todos os jobs locais passarem, acionar o sonar-scanner via Docker para garantir que a auditoria será feita sobre o código atual:
+
+```bash
+docker run --rm \
+  -e SONAR_TOKEN=$SONAR_TOKEN \
+  -v "$(pwd):/usr/src" \
+  --workdir /usr/src \
+  sonarsource/sonar-scanner-cli \
+  -Dsonar.projectKey=ElioNeto_vyx \
+  -Dsonar.organization=elioneto \
+  -Dsonar.host.url=https://sonarcloud.io
+```
+
+Após o scanner retornar, o SonarCloud processa a análise de forma **assíncrona**. Aguardar a conclusão com polling via MCP antes de ler os resultados:
 
 ```
-# 1. Quality Gate do novo código (branch atual)
+# Polling: repetir a cada 10s até status != IN_PROGRESS (máx 20 tentativas)
+<tool: sonarqube> get_analysis_status project=ElioNeto_vyx
+```
+
+Só avançar para o passo 7 quando `status = SUCCESS`. Se `status = FAILED`, reportar erro e interromper.
+
+### Passo 7 — Auditoria Sonar pós-implementação
+Com análise concluída, auditar o impacto das mudanças:
+
+```
+# 1. Quality Gate do novo código
 <tool: sonarqube> get_quality_gate_status project=ElioNeto_vyx
 
 # 2. Métricas de novo código introduzido
 <tool: sonarqube> get_measures component=ElioNeto_vyx metrics=new_violations,new_bugs,new_vulnerabilities,new_code_smells,new_security_hotspots,new_coverage,new_duplicated_lines_density
 
-# 3. Issues novas introduzidas pelo branch
+# 3. Issues novas introduzidas
 <tool: sonarqube> list_issues project=ElioNeto_vyx statuses=OPEN createdAfter=<data_inicio_da_tarefa>
 
 # 4. Hotspots novos
@@ -85,8 +108,10 @@ Critérios de bloqueio (não encerrar enquanto qualquer um falhar):
 | `new_code_smells` MAJOR | `≤ 5` | Corrigir os mais graves; documentar os demais |
 | Security Hotspots `TO_REVIEW` | `0` | Revisar via MCP antes de encerrar |
 
-### Passo 7 — Encerrar
-Só encerrar quando todos os critérios acima estiverem satisfeitos.
+Se qualquer critério falhar: corrigir código → repetir a partir do **passo 4** (não precisa reanalisar do zero se a correção for pontual) → disparar novo scan no passo 6 → reler resultados no passo 7.
+
+### Passo 8 — Encerrar
+Só encerrar quando todos os critérios do passo 7 estiverem satisfeitos.
 
 ## Jobs que rodam localmente (sem secrets)
 
@@ -100,7 +125,7 @@ Só encerrar quando todos os critérios acima estiverem satisfeitos.
 Não executar localmente:
 - `secrets-scan` (Gitleaks — usa GITHUB_TOKEN)
 - `semgrep` (container semgrep)
-- `sonarcloud` (usa SONAR_TOKEN — leitura via MCP é o caminho)
+- `sonarcloud` (usa SONAR_TOKEN — o scanner do passo 6 substitui este job)
 
 ## Como usar o MCP do SonarCloud
 
@@ -115,6 +140,7 @@ export SONAR_TOKEN="seu_user_token_do_sonarcloud"
 | Tool | Para que usar |
 |---|---|
 | `get_quality_gate_status` | Status geral do Quality Gate (OK / ERROR + condições) |
+| `get_analysis_status` | Status da última análise em andamento (IN_PROGRESS / SUCCESS / FAILED) |
 | `get_measures` | Métricas numéricas do projeto ou de novo código |
 | `list_issues` | Issues abertas filtráveis por tipo, severidade, arquivo, data |
 | `list_hotspots` | Security Hotspots por status (TO_REVIEW, ACKNOWLEDGED, FIXED) |
@@ -125,7 +151,7 @@ export SONAR_TOKEN="seu_user_token_do_sonarcloud"
 
 ```
 # Projeto geral
-bug, vulnerabilities, code_smells, security_hotspots,
+bugs, vulnerabilities, code_smells, security_hotspots,
 coverage, duplicated_lines_density,
 reliability_rating, security_rating, sqale_rating
 
@@ -137,6 +163,7 @@ new_security_hotspots, new_coverage, new_duplicated_lines_density
 ## Regras de operação
 
 - Nunca declarar sucesso sem o Quality Gate retornando `OK`.
+- Nunca auditar métricas sem antes aguardar `get_analysis_status = SUCCESS`.
 - Nunca encerrar apenas com base em "parece pronto".
 - Nunca ignorar issues BLOCKER ou CRITICAL nas áreas alteradas.
 - Sempre listar no resumo final: arquivos alterados, TODOs concluídos, jobs executados, Quality Gate, métricas Sonar.
@@ -165,6 +192,7 @@ new_security_hotspots, new_coverage, new_duplicated_lines_density
 - [ ] `.task-state.json` atualizado com todos os TODOs
 - [ ] `check-todos` retornando `ok: true`
 - [ ] `workflow-agent` retornando `workflow_finished status:success` para todos os jobs locais
+- [ ] sonar-scanner executado e `get_analysis_status = SUCCESS`
 - [ ] Quality Gate: `OK`
 - [ ] `new_bugs` = 0 e `new_vulnerabilities` = 0
 - [ ] Nenhuma nova issue BLOCKER/CRITICAL
