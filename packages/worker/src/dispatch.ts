@@ -320,4 +320,4 @@ export function handleSocketData(
 }
 
 // Exported for testing purposes
-export { dispatch, matchRoute, writeFrame, parseFrames, createAndSetupSocket };
+export { dispatch, matchRoute, writeFrame, parseFrames };
