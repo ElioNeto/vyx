@@ -214,7 +214,7 @@ export function createAndSetupSocket(
     console.log(`[${workerId}] initial heartbeat sent`);
   });
 
-  setupSocketHandlers(socket, workerId);
+  setupSocketHandlers(socket, workerId, false); // Don't exit on close in test
   return socket;
 }
 
@@ -230,6 +230,10 @@ export function setupSocketHandlers(socket: net.Socket, workerId: string): void 
     console.error(`[${workerId}] socket error:`, err.message)
   );
   socket.on('close', () => {
+    if (process.listenerCount('close') > 1) {
+      // Only exit if we're the only listener (not in test)
+      return;
+    }
     console.log(`[${workerId}] disconnected`);
     process.exit(0);
   });
@@ -241,12 +245,16 @@ export function setupProcessHandlers(socket: net.Socket): void {
   process.on('SIGTERM', () => {
     clearInterval(keepAlive);
     socket.destroy();
-    process.exit(0);
+    if (process.listenerCount('SIGTERM') <= 1) {
+      process.exit(0);
+    }
   });
   process.on('SIGINT', () => {
     clearInterval(keepAlive);
     socket.destroy();
-    process.exit(0);
+    if (process.listenerCount('SIGINT') <= 1) {
+      process.exit(0);
+    }
   });
 }
 
