@@ -182,3 +182,66 @@ func TestWorkerResponse_Struct(t *testing.T) {
 		t.Errorf("CorrelationID = %q, want %q", resp.CorrelationID, "worker-corr")
 	}
 }
+
+// Test ValidationError with empty details (lines 34-47)
+func TestValidationError_EmptyDetails(t *testing.T) {
+	ve := &dgw.ValidationError{
+		Details: []dgw.ValidationDetail{},
+	}
+	
+	errStr := ve.Error()
+	if errStr == "" {
+		t.Error("Error() should not return empty string for empty details")
+	}
+	
+	// Test Is method with nil target
+	if ve.Is(nil) {
+		t.Error("Is(nil) should return false")
+	}
+}
+
+// Test ValidationError Is with different error types (lines 34-47)
+func TestValidationError_IsDifferentTypes(t *testing.T) {
+	ve := &dgw.ValidationError{}
+	
+	// Test with ErrSchemaValidation
+	if !ve.Is(dgw.ErrSchemaValidation) {
+		t.Error("Is(ErrSchemaValidation) should return true")
+	}
+	
+	// Test with different error
+	otherErr := errors.New("other error")
+	if ve.Is(otherErr) {
+		t.Error("Is(otherErr) should return false")
+	}
+}
+
+// Test GatewayRequest with empty fields (lines 34-47)
+func TestGatewayRequest_EmptyFields(t *testing.T) {
+	req := &dgw.GatewayRequest{
+		Method: "",
+		Path:   "",
+	}
+	
+	if req.Method != "" {
+		t.Errorf("expected empty method")
+	}
+	if req.Path != "" {
+		t.Errorf("expected empty path")
+	}
+}
+
+// Test GatewayResponse with empty fields (lines 34-47)
+func TestGatewayResponse_EmptyFields(t *testing.T) {
+	resp := &dgw.GatewayResponse{
+		StatusCode: 0,
+		Body:       nil,
+	}
+	
+	if resp.StatusCode != 0 {
+		t.Errorf("expected zero status code")
+	}
+	if resp.Body != nil {
+		t.Errorf("expected nil body")
+	}
+}

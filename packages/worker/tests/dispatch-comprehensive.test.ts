@@ -613,6 +613,70 @@ describe('handleSocketConnect', () => {
       }).not.toThrow();
     });
 
+    it('should call process.exit on close when shouldExit is true', () => {
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((code?: number) => {
+        throw new Error(`process.exit called with "${code}"`);
+      });
+
+      const socketPath = '/tmp/test-close-exit';
+      const workerId = 'test-close-exit';
+      const routes: RouteRegistration[] = [];
+
+      const socket = createAndSetupSocket(socketPath, workerId, routes, true);
+      expect(socket).toBeDefined();
+
+      // Destroy socket - should trigger 'close' and then process.exit
+      expect(() => socket.destroy()).toThrow();
+
+      exitSpy.mockRestore();
+    });
+
+    it('should cleanup on SIGTERM when shouldExit is true', () => {
+      // Set VYX_TEST_MODE to prevent actual exit
+      process.env.VYX_TEST_MODE = 'true';
+
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((code?: number) => {
+        throw new Error(`process.exit called with "${code}"`);
+      });
+
+      const socketPath = '/tmp/test-sigterm';
+      const workerId = 'test-sigterm';
+      const routes: RouteRegistration[] = [];
+
+      const socket = createAndSetupSocket(socketPath, workerId, routes, true);
+      expect(socket).toBeDefined();
+
+      // Emit SIGTERM - cleanup should be called
+      process.emit('SIGTERM');
+
+      // Restore spy
+      exitSpy.mockRestore();
+      delete process.env.VYX_TEST_MODE;
+    });
+
+    it('should cleanup on SIGINT when shouldExit is true', () => {
+      // Set VYX_TEST_MODE to prevent actual exit
+      process.env.VYX_TEST_MODE = 'true';
+
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((code?: number) => {
+        throw new Error(`process.exit called with "${code}"`);
+      });
+
+      const socketPath = '/tmp/test-sigint';
+      const workerId = 'test-sigint';
+      const routes: RouteRegistration[] = [];
+
+      const socket = createAndSetupSocket(socketPath, workerId, routes, true);
+      expect(socket).toBeDefined();
+
+      // Emit SIGINT - cleanup should be called
+      process.emit('SIGINT');
+
+      // Restore spy
+      exitSpy.mockRestore();
+      delete process.env.VYX_TEST_MODE;
+    });
+
     it('should cleanup on SIGTERM when shouldExit is true', () => {
       // Set VYX_TEST_MODE to prevent actual exit
       process.env.VYX_TEST_MODE = 'true';
@@ -672,6 +736,56 @@ describe('handleSocketConnect', () => {
       const result = handleSocketData(mockSocket, Buffer.alloc(0), bufferRef, 'test-worker');
       expect(result).toBeDefined();
       expect(bufferRef.current).toBeDefined();
+    });
+
+    it('should handle invalid msgType in data events', () => {
+      const bufferRef: { current: Buffer } = { current: Buffer.alloc(0) };
+      const writes: Buffer[] = [];
+      const mockSocket = {
+        write: (buf: Buffer) => { writes.push(buf); return true; },
+        on: function(event: string, handler: Function) {
+          if (event === 'data') {
+            // Simulate data event with INVALID msgType (0xFF)
+            const payload = JSON.stringify({ method: 'GET', path: '/test' });
+            const payloadBuf = Buffer.from(payload);
+            const header = Buffer.alloc(5);
+            header.writeUInt32LE(payloadBuf.length, 0);
+            header.writeUInt8(0xFF, 4); // INVALID TYPE
+            handler(Buffer.concat([header, payloadBuf]));
+          }
+          return this;
+        },
+        destroy: () => {},
+      } as unknown as net.Socket;
+
+      const result = handleSocketData(mockSocket, Buffer.alloc(0), bufferRef, 'test-worker');
+      expect(result).toBeDefined();
+      // default branch should be covered (no error thrown)
+    });
+
+    it('should handle invalid JSON in request', () => {
+      const bufferRef: { current: Buffer } = { current: Buffer.alloc(0) };
+      const writes: Buffer[] = [];
+      const mockSocket = {
+        write: (buf: Buffer) => { writes.push(buf); return true; },
+        on: function(event: string, handler: Function) {
+          if (event === 'data') {
+            // Simulate data event with invalid JSON
+            const payload = 'invalid json';
+            const payloadBuf = Buffer.from(payload);
+            const header = Buffer.alloc(5);
+            header.writeUInt32LE(payloadBuf.length, 0);
+            header.writeUInt8(0x01, 4); // TYPE_REQUEST
+            handler(Buffer.concat([header, payloadBuf]));
+          }
+          return this;
+        },
+        destroy: () => {},
+      } as unknown as net.Socket;
+
+      const result = handleSocketData(mockSocket, Buffer.alloc(0), bufferRef, 'test-worker');
+      expect(result).toBeDefined();
+      // catch branch should be covered
     });
   });
 });

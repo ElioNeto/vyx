@@ -769,3 +769,118 @@ func (p *partialErrorTransport) Send(ctx context.Context, workerID string, msg i
 	}
 	return p.recordingTransport.Send(ctx, workerID, msg)
 }
+
+// --- Missing coverage tests ---
+
+// Test isNotConnectedError with nil error (lines 68-70)
+func TestIsNotConnectedError_Nil(t *testing.T) {
+	// isNotConnectedError returns false when err is nil
+	// We test this indirectly through handleReceiveError
+	transport := &testTransport{
+		messages: []ipc.Message{{Type: ipc.TypeHeartbeat, Payload: []byte{}}},
+		errors:   []error{nil}, // nil error
+	}
+	svc := &testService{}
+	cfg := heartbeat.Config{Interval: 20 * time.Millisecond, MissedThreshold: 2}
+	loop := heartbeat.New("w-nil-err", transport, svc, cfg, zap.NewNop())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	loop.Run(ctx)
+
+	// Should NOT have marked unhealthy (nil error is not "not connected")
+	svc.mu.Lock()
+	unhealthy := svc.unhealthy
+	svc.mu.Unlock()
+
+	if unhealthy {
+		t.Error("should not mark unhealthy for nil error")
+	}
+}
+
+// Test Run exits when context is cancelled (lines 108-110)
+func TestLoop_RunContextCancelled(t *testing.T) {
+	transport := &testTransport{messages: []ipc.Message{}}
+	svc := &testService{}
+	cfg := heartbeat.Config{Interval: 50 * time.Millisecond, MissedThreshold: 10}
+	loop := heartbeat.New("w-ctx", transport, svc, cfg, zap.NewNop())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	
+	done := make(chan struct{})
+	go func() {
+		loop.Run(ctx)
+		close(done)
+	}()
+
+	time.Sleep(60 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+		// clean exit
+	case <-time.After(2 * time.Second):
+		t.Error("Loop.Run did not exit after context cancellation")
+	}
+}
+
+// Test handleReceiveError during grace period (lines 141-153)
+func TestLoop_ReceiveError_GracePeriod(t *testing.T) {
+	transport := &testTransport{
+		messages: []ipc.Message{},
+		errors:   []error{errors.New("ipc: worker is not connected")},
+	}
+	svc := &testService{}
+	cfg := heartbeat.Config{
+		Interval:      20 * time.Millisecond,
+		MissedThreshold: 2,
+		ConnectGrace:   200 * time.Millisecond, // Long grace period
+		RetryInterval:   10 * time.Millisecond,
+	}
+	loop := heartbeat.New("w-grace", transport, svc, cfg, zap.NewNop())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	loop.Run(ctx)
+
+	// Should NOT have marked unhealthy (still in grace period)
+	svc.mu.Lock()
+	unhealthy := svc.unhealthy
+	svc.mu.Unlock()
+
+	if unhealthy {
+		t.Error("should not mark unhealthy during grace period")
+	}
+}
+
+// Test handleReceiveError exceeds missed threshold (lines 155-170)
+func TestLoop_ReceiveError_ThresholdExceeded(t *testing.T) {
+	transport := &testTransport{
+		messages: []ipc.Message{},
+		errors:   []error{errors.New("ipc: worker is not connected")},
+	}
+	svc := &testService{}
+	cfg := heartbeat.Config{
+		Interval:      20 * time.Millisecond,
+		MissedThreshold: 2,
+		ConnectGrace:   10 * time.Millisecond, // Short grace
+		RetryInterval:   10 * time.Millisecond,
+	}
+	loop := heartbeat.New("w-threshold", transport, svc, cfg, zap.NewNop())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	loop.Run(ctx)
+
+	// Should have marked unhealthy
+	svc.mu.Lock()
+	unhealthy := svc.unhealthy
+	svc.mu.Unlock()
+
+	if !unhealthy {
+		t.Error("should mark unhealthy after missed threshold")
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,5 +129,90 @@ func TestHandler_WrongMessageType(t *testing.T) {
 	err := h.Handle(context.Background(), "node:api")
 	if err == nil {
 		t.Fatal("expected error for non-handshake frame")
+	}
+	if len(svc.markedRunning) != 0 {
+		t.Error("MarkRunning should not be called on handshake failure")
+	}
+}
+
+func TestHandler_ContextCancelled(t *testing.T) {
+	// Create a transport that returns context.Canceled error
+	transport := &fakeTransport{err: context.Canceled}
+	svc := &fakeService{}
+	routes := dgw.NewRouteMap(nil)
+	h := handshake.NewHandler(transport, routes, svc, zap.NewNop())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	err := h.Handle(ctx, "node:api")
+	if err == nil {
+		t.Fatal("expected error on context cancellation")
+	}
+	// Should mention "did not send handshake within deadline"
+	if !strings.Contains(err.Error(), "did not send handshake") {
+		t.Errorf("expected context-related error, got: %v", err)
+	}
+}
+
+func TestHandler_TransportError(t *testing.T) {
+	transport := &fakeTransport{err: errors.New("connection reset")}
+	svc := &fakeService{}
+	routes := dgw.NewRouteMap(nil)
+	h := handshake.NewHandler(transport, routes, svc, zap.NewNop())
+
+	err := h.Handle(context.Background(), "node:api")
+	if err == nil {
+		t.Fatal("expected error on transport failure")
+	}
+	// Should NOT mention "handshake within deadline" (that's for context errors)
+	if strings.Contains(err.Error(), "handshake within deadline") {
+		t.Errorf("should not mention deadline for generic transport error: %v", err)
+	}
+}
+
+func TestHandler_MarkRunningError(t *testing.T) {
+	payload := ipc.HandshakePayload{
+		WorkerID: "node:api",
+		Capabilities: []ipc.HandshakeCapability{
+			{Path: "/api/products", Method: "GET"},
+		},
+	}
+	transport := &fakeTransport{msg: handshakeMsg(t, payload)}
+	svc := &fakeService{err: errors.New("failed to mark running")}
+	routes := dgw.NewRouteMap([]dgw.RouteEntry{
+		{Path: "/api/products", Method: "GET", WorkerID: "node:api"},
+	})
+	h := handshake.NewHandler(transport, routes, svc, zap.NewNop())
+
+	err := h.Handle(context.Background(), "node:api")
+	if err == nil {
+		t.Fatal("expected error when MarkRunning fails")
+	}
+	if !strings.Contains(err.Error(), "MarkRunning") {
+		t.Errorf("expected MarkRunning error, got: %v", err)
+	}
+}
+
+func TestHandler_ValidateCapabilities_EmptyRouteMap(t *testing.T) {
+	payload := ipc.HandshakePayload{
+		WorkerID: "node:api",
+		Capabilities: []ipc.HandshakeCapability{
+			{Path: "/api/products", Method: "GET"},
+			{Path: "/api/users", Method: "POST"},
+		},
+	}
+	transport := &fakeTransport{msg: handshakeMsg(t, payload)}
+	svc := &fakeService{}
+	// Empty route map — all capabilities will be mismatched (warning only)
+	routes := dgw.NewRouteMap(nil)
+	h := handshake.NewHandler(transport, routes, svc, zap.NewNop())
+
+	// Should NOT return error — mismatches are warnings
+	if err := h.Handle(context.Background(), "node:api"); err != nil {
+		t.Fatalf("unexpected error on route mismatch: %v", err)
+	}
+	if len(svc.markedRunning) != 1 {
+		t.Error("MarkRunning should be called despite route mismatch")
 	}
 }

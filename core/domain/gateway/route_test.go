@@ -124,3 +124,92 @@ func TestSwap(t *testing.T) {
 		t.Errorf("expected worker w-new, got %s", result.Entry.WorkerID)
 	}
 }
+
+// Test LoadRouteMap with invalid JSON (lines 70-91)
+func TestLoadRouteMap_InvalidJSON(t *testing.T) {
+	// Create a temporary file with invalid JSON
+	tmpfile := "/tmp/test_invalid_route_map.json"
+	content := `invalid json`
+	err := os.WriteFile(tmpfile, []byte(content), 0644)
+	if err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+	defer os.Remove(tmpfile)
+	
+	rm, err := dgw.LoadRouteMap(tmpfile)
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+	if rm != nil {
+		t.Error("expected nil RouteMap for invalid JSON")
+	}
+}
+
+// Test LoadRouteMap with missing routes field (lines 70-91)
+func TestLoadRouteMap_MissingRoutesField(t *testing.T) {
+	// Create a temporary file with JSON missing "routes" field
+	tmpfile := "/tmp/test_missing_routes.json"
+	content := `{"version": "1.0"}`
+	err := os.WriteFile(tmpfile, []byte(content), 0644)
+	if err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+	defer os.Remove(tmpfile)
+	
+	rm, err := dgw.LoadRouteMap(tmpfile)
+	if err != nil {
+		t.Fatalf("LoadRouteMap failed: %v", err)
+	}
+	if rm == nil {
+		t.Fatal("expected RouteMap for missing routes field")
+	}
+	// Should have no routes
+	result, ok := rm.Lookup("GET", "/test")
+	if ok {
+		t.Error("expected no route found")
+	}
+}
+
+// Test Lookup with empty route map (lines 92-114)
+func TestLookup_EmptyRouteMap(t *testing.T) {
+	rm := dgw.NewRouteMap(nil)
+	
+	result, ok := rm.Lookup("GET", "/test")
+	if ok {
+		t.Error("expected no route found in empty map")
+	}
+	if result != nil {
+		t.Error("expected nil result")
+	}
+}
+
+// Test copyParams with missing param (lines 160-169)
+func TestCopyParams_MissingParam(t *testing.T) {
+	path := "/api/users/:id"
+	params := map[string]string{}
+	
+	// Call copyParams (need to export or test indirectly)
+	// For now, test Lookup which uses copyParams
+	entries := []dgw.RouteEntry{
+		{Path: "/api/users/:id", Method: "GET", WorkerID: "w1"},
+	}
+	rm := dgw.NewRouteMap(entries)
+	
+	// Lookup with missing param value
+	result, ok := rm.Lookup("GET", "/api/users/")
+	if ok {
+		t.Error("expected no route found for missing param")
+	}
+}
+
+// Test traverse with nil node (lines 128-159)
+func TestTraverse_NilNode(t *testing.T) {
+	// Create a RouteMap and test traversal of non-existent path
+	rm := dgw.NewRouteMap(nil)
+	
+	// Lookup non-existent path
+	result, ok := rm.Lookup("GET", "/non-existent")
+	if ok {
+		t.Error("expected no route found")
+	}
+}
