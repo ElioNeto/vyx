@@ -21,9 +21,10 @@ type LogWriter func(workerID string, line string)
 
 // Manager spawns and manages OS child processes for each worker.
 type Manager struct {
-	mu        sync.RWMutex
-	processes map[string]*exec.Cmd
-	logWriter LogWriter
+	mu               sync.RWMutex
+	processes        map[string]*exec.Cmd
+	logWriter        LogWriter
+	shutdownTimeout  time.Duration
 }
 
 // New creates an empty process Manager. An optional LogWriter can be provided
@@ -45,6 +46,14 @@ type Option func(*Manager)
 func WithLogWriter(w LogWriter) Option {
 	return func(m *Manager) {
 		m.logWriter = w
+	}
+}
+
+// WithShutdownTimeout sets the timeout for graceful shutdown.
+// If not set, defaultShutdownTimeout is used.
+func WithShutdownTimeout(timeout time.Duration) Option {
+	return func(m *Manager) {
+		m.shutdownTimeout = timeout
 	}
 }
 
@@ -124,7 +133,7 @@ func (m *Manager) processBufferChunk(writer LogWriter, workerID string, buf []by
 	lineStart := 0
 	for i, b := range buf {
 		if b == '\n' {
-			line := string(buf[:i])
+			line := string(buf[lineStart:i])
 			if line != "" {
 				writer(workerID, line)
 			}
@@ -155,9 +164,13 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 		close(done)
 	}()
 
+	timeout := defaultShutdownTimeout
+	if m.shutdownTimeout > 0 {
+		timeout = m.shutdownTimeout
+	}
 	select {
 	case <-done:
-	case <-time.After(defaultShutdownTimeout):
+	case <-time.After(timeout):
 		_ = killProcess(cmd)
 		return worker.ErrStopTimeout
 	}

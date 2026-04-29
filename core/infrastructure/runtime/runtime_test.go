@@ -194,3 +194,64 @@ func TestRuntime_DefaultVersion(t *testing.T) {
 		})
 	}
 }
+
+func TestNeedsProvisioning(t *testing.T) {
+	// Empty command
+	if NeedsProvisioning("") != false {
+		t.Error("expected false for empty command")
+	}
+	// Go command should return false
+	if NeedsProvisioning("go run main.go") != false {
+		t.Error("expected false for go command")
+	}
+	// Node command should return true
+	if NeedsProvisioning("node index.js") != true {
+		t.Error("expected true for node command")
+	}
+	// Python command should return true
+	if NeedsProvisioning("python3 app.py") != true {
+		t.Error("expected true for python command")
+	}
+	// VYX_SKIP_RUNTIME=1 should skip
+	os.Setenv("VYX_SKIP_RUNTIME", "1")
+	defer os.Unsetenv("VYX_SKIP_RUNTIME")
+	if NeedsProvisioning("node index.js") != false {
+		t.Error("expected false when VYX_SKIP_RUNTIME=1")
+	}
+}
+
+func TestDefaultLogger(t *testing.T) {
+	var buf bytes.Buffer
+	logger := NewDefaultLogger(&buf)
+	logger.Print("hello")
+	if buf.String() != "hello" {
+		t.Errorf("Print: got %q, want %q", buf.String(), "hello")
+	}
+	buf.Reset()
+	logger.Printf("value=%d", 42)
+	if buf.String() != "value=42" {
+		t.Errorf("Printf: got %q, want %q", buf.String(), "value=42")
+	}
+}
+
+// TestDetect_AdditionalCases tests more branches.
+func TestDetect_AdditionalCases(t *testing.T) {
+	tests := []struct {
+		command string
+		want    Runtime
+	}{
+		{"node", RuntimeNode},
+		{"node20", RuntimeNode},
+		{"python", RuntimePython},
+		{"python3.12", RuntimePython},
+		{"go1.21", RuntimeGo},
+		{"", RuntimeUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.command, func(t *testing.T) {
+			if got := Detect(tt.command); got != tt.want {
+				t.Errorf("Detect(%q) = %v, want %v", tt.command, got, tt.want)
+			}
+		})
+	}
+}
