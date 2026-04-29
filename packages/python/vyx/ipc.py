@@ -174,6 +174,8 @@ async def start_worker(handlers: dict):
 
             try:
                 result = handler(request)
+                if asyncio.iscoroutine(result):
+                    result = await result
                 await client.send_response(200, result, request.get("correlation_id", ""))
             except Exception as e:
                 await client.send_error(500, str(e))

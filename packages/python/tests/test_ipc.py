@@ -4,7 +4,7 @@ import msgpack
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
-from vyx.ipc import IPCClient, Message, MessageType, ERR_NOT_CONNECTED
+from vyx.ipc import IPCClient, Message, MessageType, ERR_NOT_CONNECTED, start_worker
 
 
 class TestMessageType:
@@ -154,6 +154,305 @@ class TestIPCClientMethods:
         await client.close()
         assert mock_writer.close.called
         # Note: close() doesn't reset writer/reader to None in current impl
+
+    @pytest.mark.asyncio
+    async def test_connect_success(self):
+        """Test successful connection."""
+        client = IPCClient(socket_path="/tmp/test.sock")
+        
+        # Mock open_unix_connection
+        mock_reader = MagicMock()
+        mock_writer = MagicMock()
+        
+        with patch("asyncio.open_unix_connection", return_value=(mock_reader, mock_writer)) as mock_connect:
+            with patch.object(client, '_send_handshake', new_callable=AsyncMock) as mock_handshake:
+                await client.connect()
+        
+        assert client.reader == mock_reader
+        assert client.writer == mock_writer
+        mock_handshake.assert_called_once()
+    
+    @pytest.mark.asyncio
+    async def test_connect_no_socket_path(self):
+        """Test connect without socket path."""
+        client = IPCClient()  # No socket path
+        
+        with pytest.raises(RuntimeError, match="VYX_SOCKET not set"):
+            await client.connect()
+    
+    @pytest.mark.asyncio
+    async def test_send_handshake(self):
+        """Test _send_handshake method."""
+        client = IPCClient(socket_path="/tmp/test.sock")
+        client.worker_id = "python:test"
+        client.writer = AsyncMock()
+        
+        with patch.object(client, '_write', new_callable=AsyncMock) as mock_write:
+            await client._send_handshake()
+        
+        mock_write.assert_called_once()
+        # Verify the message passed to _write
+        call_args = mock_write.call_args[0][0]
+        assert call_args.type == MessageType.TYPE_HANDSHAKE
+        handshake_data = msgpack.unpackb(call_args.payload, raw=False)
+        assert handshake_data["worker_id"] == "python:test"
+        assert handshake_data["runtime"] == "python"
+    
+    @pytest.mark.asyncio
+    async def test_send_request(self):
+        """Test send_request method."""
+        client = IPCClient(socket_path="/tmp/test.sock")
+        client.writer = AsyncMock()
+        client.correlation_id = "test-corr-id"
+        
+        # Mock _write and _read
+        with patch.object(client, '_write', new_callable=AsyncMock) as mock_write:
+            with patch.object(client, '_read', new_callable=AsyncMock) as mock_read:
+                # Mock response
+                mock_read.return_value = Message(
+                    MessageType.TYPE_RESPONSE,
+                    msgpack.packb({"status": "ok"}, use_bin_type=True)
+                )
+                result = await client.send_request("GET", "/test", correlation_id="test-corr-id")
+        
+        mock_write.assert_called_once()
+        assert result == {"status": "ok"}
+    
+    @pytest.mark.asyncio
+    async def test_send_request_error_response(self):
+        """Test send_request with error response."""
+        client = IPCClient(socket_path="/tmp/test.sock")
+        client.writer = AsyncMock()
+        
+        with patch.object(client, '_write', new_callable=AsyncMock):
+            with patch.object(client, '_read', new_callable=AsyncMock) as mock_read:
+                mock_read.return_value = Message(
+                    MessageType.TYPE_ERROR,
+                    msgpack.packb(b"error occurred", use_bin_type=True)
+                )
+                with pytest.raises(RuntimeError, match="IPC error"):
+                    await client.send_request("GET", "/test")
+    
+    @pytest.mark.asyncio
+    async def test_send_request_wrong_response_type(self):
+        """Test send_request with unexpected response type."""
+        client = IPCClient(socket_path="/tmp/test.sock")
+        client.writer = AsyncMock()
+        
+        with patch.object(client, '_write', new_callable=AsyncMock):
+            with patch.object(client, '_read', new_callable=AsyncMock) as mock_read:
+                mock_read.return_value = Message(
+                    0x99,  # Unknown type
+                    b"data"
+                )
+                with pytest.raises(RuntimeError, match="unexpected message type"):
+                    await client.send_request("GET", "/test")
+    
+    @pytest.mark.asyncio
+    async def test_receive_heartbeat(self):
+        """Test receive method with heartbeat."""
+        client = IPCClient(socket_path="/tmp/test.sock")
+        client.reader = AsyncMock()
+        
+        with patch.object(client, '_read', new_callable=AsyncMock) as mock_read:
+            mock_read.return_value = Message(MessageType.TYPE_HEARTBEAT, b"")
+            result = await client.receive()
+        
+        assert result == {"type": "heartbeat"}
+    
+    @pytest.mark.asyncio
+    async def test_receive_request(self):
+        """Test receive method with request."""
+        client = IPCClient(socket_path="/tmp/test.sock")
+        
+        test_request = {
+            "method": "GET",
+            "path": "/test",
+            "headers": {},
+        }
+        
+        with patch.object(client, '_read', new_callable=AsyncMock) as mock_read:
+            mock_read.return_value = Message(
+                MessageType.TYPE_REQUEST,
+                msgpack.packb(test_request, use_bin_type=True)
+            )
+            result = await client.receive()
+        
+        assert result["method"] == "GET"
+        assert result["path"] == "/test"
+    
+    @pytest.mark.asyncio
+    async def test_receive_unexpected_type(self):
+        """Test receive with unexpected message type."""
+        client = IPCClient(socket_path="/tmp/test.sock")
+        
+        with patch.object(client, '_read', new_callable=AsyncMock) as mock_read:
+            mock_read.return_value = Message(0x99, b"data")
+            with pytest.raises(RuntimeError, match="unexpected message type"):
+                await client.receive()
+    
+    @pytest.mark.asyncio
+    async def test_send_response(self):
+        """Test send_response method."""
+        client = IPCClient(socket_path="/tmp/test.sock")
+        client.writer = AsyncMock()
+        
+        with patch.object(client, '_write', new_callable=AsyncMock) as mock_write:
+            await client.send_response(200, {"data": "test"}, correlation_id="corr-123")
+        
+        mock_write.assert_called_once()
+        call_args = mock_write.call_args[0][0]
+        assert call_args.type == MessageType.TYPE_RESPONSE
+        response_data = msgpack.unpackb(call_args.payload, raw=False)
+        assert response_data["status_code"] == 200
+        assert response_data["correlation_id"] == "corr-123"
+    
+    @pytest.mark.asyncio
+    async def test_send_error(self):
+        """Test send_error method."""
+        client = IPCClient(socket_path="/tmp/test.sock")
+        client.writer = AsyncMock()
+        
+        with patch.object(client, '_write', new_callable=AsyncMock) as mock_write:
+            await client.send_error(500, "Internal error", correlation_id="corr-456")
+        
+        mock_write.assert_called_once()
+        call_args = mock_write.call_args[0][0]
+        assert call_args.type == MessageType.TYPE_ERROR
+        error_data = msgpack.unpackb(call_args.payload, raw=False)
+        assert error_data["status_code"] == 500
+        assert error_data["error"] == "Internal error"
+
+
+class TestStartWorker:
+    """Test start_worker function."""
+    
+    @pytest.mark.asyncio
+    async def test_start_worker_handles_requests(self):
+        """Test start_worker processes requests."""
+        import asyncio
+        
+        handlers = {
+            ("GET", "/test"): lambda req: {"message": "hello"}
+        }
+        
+        # Mock IPCClient
+        mock_client = AsyncMock()
+        # Return a valid request first, then raise to exit loop
+        mock_client.receive.side_effect = [
+            {
+                "method": "GET",
+                "path": "/test",
+                "correlation_id": "test-123"
+            },
+            RuntimeError("exit loop")
+        ]
+        
+        with patch("vyx.ipc.IPCClient", return_value=mock_client):
+            try:
+                await start_worker(handlers)
+            except RuntimeError:
+                pass  # Expected
+        
+        mock_client.connect.assert_called_once()
+        mock_client.send_response.assert_called_once()
+        call_args = mock_client.send_response.call_args
+        assert call_args[0][0] == 200  # status_code
+    
+    @pytest.mark.asyncio
+    async def test_start_worker_handles_heartbeat(self):
+        """Test start_worker skips heartbeat."""
+        import asyncio
+        
+        handlers = {}
+        
+        mock_client = AsyncMock()
+        # First return heartbeat, then raise to exit
+        mock_client.receive.side_effect = [
+            {"type": "heartbeat"},
+            RuntimeError("exit loop")
+        ]
+        
+        with patch("vyx.ipc.IPCClient", return_value=mock_client):
+            try:
+                await start_worker(handlers)
+            except RuntimeError:
+                pass
+        
+        # Should NOT call handlers or send_response for heartbeat
+        mock_client.send_response.assert_not_called()
+        mock_client.send_error.assert_not_called()
+    
+    @pytest.mark.asyncio
+    async def test_start_worker_no_handler(self):
+        """Test start_worker with no matching handler."""
+        handlers = {}
+        
+        mock_client = AsyncMock()
+        mock_client.receive.side_effect = [
+            {
+                "method": "GET",
+                "path": "/unknown",
+                "correlation_id": "test-456"
+            },
+            RuntimeError("exit loop")
+        ]
+        
+        with patch("vyx.ipc.IPCClient", return_value=mock_client):
+            try:
+                await start_worker(handlers)
+            except RuntimeError:
+                pass
+        
+        mock_client.send_error.assert_called_once()
+        call_args = mock_client.send_error.call_args
+        assert call_args[0][0] == 404
+    
+    @pytest.mark.asyncio
+    async def test_start_worker_handler_exception(self):
+        """Test start_worker handles handler exceptions."""
+        # Use sync handler that raises
+        def bad_handler(req):
+            raise Exception("boom")
+        
+        handlers = {
+            ("GET", "/error"): bad_handler
+        }
+        
+        mock_client = AsyncMock()
+        mock_client.receive.side_effect = [
+            {
+                "method": "GET",
+                "path": "/error",
+                "correlation_id": "test-789"
+            },
+            RuntimeError("exit loop")
+        ]
+        
+        with patch("vyx.ipc.IPCClient", return_value=mock_client):
+            try:
+                await start_worker(handlers)
+            except RuntimeError:
+                pass
+        
+        mock_client.send_error.assert_called_once()
+        call_args = mock_client.send_error.call_args
+        assert call_args[0][0] == 500
+    
+    @pytest.mark.asyncio
+    async def test_start_worker_exit_on_exception(self):
+        """Test start_worker exits on outer exception."""
+        handlers = {}
+        
+        mock_client = AsyncMock()
+        # Raise RuntimeError on first receive call
+        mock_client.receive.side_effect = RuntimeError("connection lost")
+        
+        with patch("vyx.ipc.IPCClient", return_value=mock_client):
+            await start_worker(handlers)
+        
+        # Should have called close
+        mock_client.close.assert_called_once()
 
 
 if __name__ == "__main__":
