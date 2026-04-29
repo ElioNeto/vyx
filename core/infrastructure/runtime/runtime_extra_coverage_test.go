@@ -780,6 +780,10 @@ func TestEnsureNode_InstallFails(t *testing.T) {
 
 // TestDownloadFNM_Success tests successful FNM download
 func TestDownloadFNM_Success(t *testing.T) {
+	// Skip if unzip is not available
+	if _, err := exec.LookPath("unzip"); err != nil {
+		t.Skip("skipping test: unzip not found in PATH")
+	}
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var buf bytes.Buffer
 		zw := zip.NewWriter(&buf)

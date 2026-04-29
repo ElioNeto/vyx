@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -60,6 +61,18 @@ func TestEnsure_Node_DownloadFails(t *testing.T) {
 }
 
 func TestEnsure_Node_DownloadsMockFNM(t *testing.T) {
+	// Skip this test if unzip is not available (Docker CI environment)
+	if _, err := exec.LookPath("unzip"); err != nil {
+		t.Skip("skipping test: unzip not found in PATH")
+	}
+	// Skip this test in Docker CI because it requires network and git.
+	if os.Getenv("CI") == "true" {
+		t.Skip("skipping test in CI environment")
+	}
+	// Skip this test in Docker CI because it requires network and git.
+	if os.Getenv("CI") == "true" {
+		t.Skip("skipping test in CI environment")
+	}
 	// Skip this test in Docker CI because it requires network and git.
 	if os.Getenv("CI") == "true" {
 		t.Skip("skipping test in CI environment")
