@@ -186,39 +186,51 @@ export function getSocketPath(options: WorkerOptions): string {
   );
 }
 
-export function start(options: WorkerOptions): void {
+export function start(options: WorkerOptions, shouldExit: boolean = true): void {
   const socketPath = getSocketPath(options);
-  const socket = createAndSetupSocket(socketPath, options.workerId, options.capabilities);
-  setupProcessHandlers(socket);
+  const socket = createAndSetupSocket(socketPath, options.workerId, options.capabilities, shouldExit);
+  setupProcessHandlers(socket, shouldExit);
 }
 
 export function createAndSetupSocket(
   socketPath: string,
   workerId: string,
-  capabilities?: Array<{ path: string; method: string }>
+  capabilities?: Array<{ path: string; method: string }>,
+  shouldExit: boolean = true
 ): net.Socket {
   console.log(`[${workerId}] connecting to ${socketPath}`);
 
   const socket = net.createConnection(socketPath, () => {
     console.log(`[${workerId}] connected to core`);
-
-    const handshake = {
-      type: 'handshake',
-      worker_id: workerId,
-      capabilities: capabilities ?? [],
-    };
-    writeFrame(socket, TYPE_HANDSHAKE, handshake);
-    console.log(`[${workerId}] handshake sent`);
-
-    writeFrame(socket, TYPE_HEARTBEAT, null);
-    console.log(`[${workerId}] initial heartbeat sent`);
+    handleSocketConnect(socket, workerId, capabilities);
   });
 
-  setupSocketHandlers(socket, workerId, false); // Don't exit on close in test
+  setupSocketHandlers(socket, workerId, shouldExit);
   return socket;
 }
 
-export function setupSocketHandlers(socket: net.Socket, workerId: string): void {
+export function handleSocketConnect(
+  socket: net.Socket,
+  workerId: string,
+  capabilities?: Array<{ path: string; method: string }>
+): void {
+  const handshake = {
+    type: 'handshake',
+    worker_id: workerId,
+    capabilities: capabilities ?? [],
+  };
+  writeFrame(socket, TYPE_HANDSHAKE, handshake);
+  console.log(`[${workerId}] handshake sent`);
+
+  writeFrame(socket, TYPE_HEARTBEAT, null);
+  console.log(`[${workerId}] initial heartbeat sent`);
+}
+
+export function setupSocketHandlers(
+  socket: net.Socket,
+  workerId: string,
+  shouldExit: boolean = true
+): void {
   const bufferRef: { current: Buffer } = { current: Buffer.alloc(0) };
 
   socket.on('data', (data: Buffer) => {
@@ -230,6 +242,10 @@ export function setupSocketHandlers(socket: net.Socket, workerId: string): void 
     console.error(`[${workerId}] socket error:`, err.message)
   );
   socket.on('close', () => {
+    // Don't exit in test mode or if VYX_TEST_MODE is set
+    if (!shouldExit || process.env.VYX_TEST_MODE) {
+      return;
+    }
     if (process.listenerCount('close') > 1) {
       // Only exit if we're the only listener (not in test)
       return;
@@ -239,20 +255,31 @@ export function setupSocketHandlers(socket: net.Socket, workerId: string): void 
   });
 }
 
-export function setupProcessHandlers(socket: net.Socket): void {
-  const keepAlive = setInterval(() => {}, 30_000);
+export function setupProcessHandlers(socket: net.Socket, shouldExit: boolean = true): void {
+  // Only set up keepAlive interval if we're actually exiting (not in test mode)
+  let keepAlive: ReturnType<typeof setInterval> | undefined;
+  if (shouldExit) {
+    keepAlive = setInterval(() => {}, 30_000);
+  }
+
+  const shouldActuallyExit = shouldExit && !process.env.VYX_TEST_MODE;
+
+  const cleanup = () => {
+    if (keepAlive) {
+      clearInterval(keepAlive);
+    }
+    socket.destroy();
+  };
 
   process.on('SIGTERM', () => {
-    clearInterval(keepAlive);
-    socket.destroy();
-    if (process.listenerCount('SIGTERM') <= 1) {
+    cleanup();
+    if (shouldActuallyExit && process.listenerCount('SIGTERM') <= 1) {
       process.exit(0);
     }
   });
   process.on('SIGINT', () => {
-    clearInterval(keepAlive);
-    socket.destroy();
-    if (process.listenerCount('SIGINT') <= 1) {
+    cleanup();
+    if (shouldActuallyExit && process.listenerCount('SIGINT') <= 1) {
       process.exit(0);
     }
   });
