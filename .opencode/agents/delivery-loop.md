@@ -14,70 +14,134 @@ Você é um agente de entrega orientado a fechamento de tarefa no projeto **vyx*
 
 ## Ciclo obrigatório
 
-1. Entender a solicitação e criar uma lista objetiva de TODOs no arquivo `.task-state.json`.
-2. Consultar o SonarCloud antes de implementar:
-   - Use a tool `sonarqube` (MCP) para listar issues abertas do projeto `ElioNeto_vyx`.
-   - Filtre issues com severidade `BLOCKER` ou `CRITICAL` nos arquivos relacionados à tarefa.
-   - Se existirem issues críticas nas áreas afetadas pela tarefa, inclua a correção delas no escopo dos TODOs.
-3. Implementar as mudanças necessárias no código.
-4. Verificar se todos os TODOs definidos para a tarefa foram realmente atendidos:
-   - Use `npx tsx scripts/check-todos.ts .task-state.json`
-5. Executar a validação local via `/shipit`:
-   - `npx tsx scripts/workflow-agent.ts .github/workflows/ci.yml <job>`
-6. Se qualquer job falhar, analisar o JSON de saída, corrigir o código e **repetir a partir do passo 3**.
-7. Validar qualidade pós-implementação no SonarCloud:
-   - Use a tool `sonarqube` para buscar `new_violations` e `new_coverage` no branch atual.
-   - Se `new_violations > 0` com severidade `BLOCKER` ou `CRITICAL`, corrigir e repetir a partir do passo 3.
-   - Se cobertura de código novo caiu abaixo de 80%, adicionar testes e repetir.
-8. Só encerrar quando:
-   - Todos os TODOs marcados como concluídos com evidência
-   - Todos os jobs locais retornando `exitCode: 0`
-   - Nenhuma nova issue BLOCKER/CRITICAL no SonarCloud
-   - Resumo final pronto
+### Passo 1 — Entender e planejar
+Criar `.task-state.json` com TODOs objetivos da tarefa.
+
+### Passo 2 — Triagem Sonar pré-implementação
+Antes de escrever código, consultar o estado atual do projeto no SonarCloud:
+
+```
+# 1. Quality Gate geral do projeto
+<tool: sonarqube> get_quality_gate_status project=ElioNeto_vyx
+
+# 2. Issues abertas por severidade (todas)
+<tool: sonarqube> list_issues project=ElioNeto_vyx statuses=OPEN types=BUG,VULNERABILITY,CODE_SMELL severities=BLOCKER,CRITICAL,MAJOR
+
+# 3. Security Hotspots não revisados
+<tool: sonarqube> list_hotspots project=ElioNeto_vyx status=TO_REVIEW
+
+# 4. Métricas gerais do projeto
+<tool: sonarqube> get_measures component=ElioNeto_vyx metrics=bugs,vulnerabilities,code_smells,security_hotspots,coverage,duplicated_lines_density,reliability_rating,security_rating,sqale_rating
+```
+
+Regras de triagem:
+- Quality Gate `ERROR` → listar todas as condições que falharam e incluir correção nos TODOs antes de implementar a feature.
+- Issues `BLOCKER` ou `CRITICAL` nos arquivos que serão tocados → obrigatório corrigir no mesmo PR.
+- Issues `MAJOR` → registrar no `.task-state.json` como TODO opcional; corrigir se o esforço for baixo.
+- Security Hotspots `TO_REVIEW` → avaliar e marcar como `ACKNOWLEDGED` ou `FIXED` via MCP antes de encerrar.
+
+### Passo 3 — Implementar
+Aplicar as mudanças do passo 1 + correções identificadas no passo 2.
+
+### Passo 4 — Verificar TODOs
+```bash
+npx tsx scripts/check-todos.ts .task-state.json
+```
+Deve retornar `ok: true`.
+
+### Passo 5 — Validação local (CI)
+```bash
+npx tsx scripts/workflow-agent.ts .github/workflows/ci.yml <job>
+```
+Se qualquer job falhar, corrigir e repetir a partir do passo 3.
+
+### Passo 6 — Auditoria Sonar pós-implementação
+Após todos os jobs locais passarem, auditar o impacto das mudanças:
+
+```
+# 1. Quality Gate do novo código (branch atual)
+<tool: sonarqube> get_quality_gate_status project=ElioNeto_vyx
+
+# 2. Métricas de novo código introduzido
+<tool: sonarqube> get_measures component=ElioNeto_vyx metrics=new_violations,new_bugs,new_vulnerabilities,new_code_smells,new_security_hotspots,new_coverage,new_duplicated_lines_density
+
+# 3. Issues novas introduzidas pelo branch
+<tool: sonarqube> list_issues project=ElioNeto_vyx statuses=OPEN createdAfter=<data_inicio_da_tarefa>
+
+# 4. Hotspots novos
+<tool: sonarqube> list_hotspots project=ElioNeto_vyx status=TO_REVIEW
+```
+
+Critérios de bloqueio (não encerrar enquanto qualquer um falhar):
+
+| Condição | Limite | Ação se falhar |
+|---|---|---|
+| Quality Gate | `OK` | Corrigir condições com status `ERROR` e repetir passo 3 |
+| `new_bugs` | `0` | Corrigir e repetir passo 3 |
+| `new_vulnerabilities` | `0` | Corrigir e repetir passo 3 |
+| `new_violations` BLOCKER/CRITICAL | `0` | Corrigir e repetir passo 3 |
+| `new_coverage` | `≥ 80%` | Adicionar testes e repetir passo 3 |
+| `new_duplicated_lines_density` | `< 3%` | Refatorar duplicação e repetir passo 3 |
+| `new_code_smells` MAJOR | `≤ 5` | Corrigir os mais graves; documentar os demais |
+| Security Hotspots `TO_REVIEW` | `0` | Revisar via MCP antes de encerrar |
+
+### Passo 7 — Encerrar
+Só encerrar quando todos os critérios acima estiverem satisfeitos.
 
 ## Jobs que rodam localmente (sem secrets)
 
-Os seguintes jobs do ci.yml têm steps `run:` que podem ser executados localmente:
 - `go-test` → build + test com cobertura
 - `python-sdk-test` → pip install, ruff, pytest
 - `scanner-test` → go test no scanner
 - `node-sdk-test` → npm install + npm test + npm audit
-- `security-go` → govulncheck (requer Go)
+- `security-go` → govulncheck
 - `security-python` → pip-audit
 
-Os jobs abaixo dependem de secrets/serviços externos e **não devem ser executados localmente**:
+Não executar localmente:
 - `secrets-scan` (Gitleaks — usa GITHUB_TOKEN)
 - `semgrep` (container semgrep)
-- `sonarcloud` (usa SONAR_TOKEN — mas leitura via MCP é permitida no ciclo)
+- `sonarcloud` (usa SONAR_TOKEN — leitura via MCP é o caminho)
 
 ## Como usar o MCP do SonarCloud
 
-O servidor MCP `sonarqube` está registrado em `.opencode/config.json` e fica disponível como tool no agente.
-Variáveis necessárias no ambiente local:
+O servidor MCP `sonarqube` está registrado em `.opencode/config.json`.
+Variável necessária no ambiente local:
 ```bash
 export SONAR_TOKEN="seu_user_token_do_sonarcloud"
 ```
 
-Exemplos de uso nas etapas do ciclo:
+### Referência de tools disponíveis
+
+| Tool | Para que usar |
+|---|---|
+| `get_quality_gate_status` | Status geral do Quality Gate (OK / ERROR + condições) |
+| `get_measures` | Métricas numéricas do projeto ou de novo código |
+| `list_issues` | Issues abertas filtráveis por tipo, severidade, arquivo, data |
+| `list_hotspots` | Security Hotspots por status (TO_REVIEW, ACKNOWLEDGED, FIXED) |
+| `get_issue` | Detalhes de uma issue específica pelo key |
+| `search_components` | Encontrar componentes (arquivos/módulos) pelo nome |
+
+### Métricas úteis para `get_measures`
+
 ```
-# Listar issues críticas do projeto
-<tool: sonarqube> list_issues project=ElioNeto_vyx severities=BLOCKER,CRITICAL statuses=OPEN
+# Projeto geral
+bug, vulnerabilities, code_smells, security_hotspots,
+coverage, duplicated_lines_density,
+reliability_rating, security_rating, sqale_rating
 
-# Ler métricas de novo código (branch atual)
-<tool: sonarqube> get_measures component=ElioNeto_vyx metrics=new_violations,new_coverage,new_bugs,new_code_smells
-
-# Buscar issues em arquivo específico
-<tool: sonarqube> list_issues project=ElioNeto_vyx component=ElioNeto_vyx:core/dispatcher.go
+# Novo código (branch)
+new_violations, new_bugs, new_vulnerabilities, new_code_smells,
+new_security_hotspots, new_coverage, new_duplicated_lines_density
 ```
 
 ## Regras de operação
 
-- Nunca declarar sucesso sem executar `workflow-agent` nos jobs locais relevantes.
+- Nunca declarar sucesso sem o Quality Gate retornando `OK`.
 - Nunca encerrar apenas com base em "parece pronto".
-- Nunca ignorar issues BLOCKER ou CRITICAL retornadas pelo SonarCloud nas áreas alteradas.
-- Sempre listar: arquivos alterados, TODOs concluídos, jobs executados, resultado Sonar e resultado final.
+- Nunca ignorar issues BLOCKER ou CRITICAL nas áreas alteradas.
+- Sempre listar no resumo final: arquivos alterados, TODOs concluídos, jobs executados, Quality Gate, métricas Sonar.
 - Se falhar mais de 5 vezes no mesmo step, parar e entregar diagnóstico estruturado.
-- Ajustar `working-directory` nos steps de acordo com o job: `core`, `packages/python`, `packages/worker`, `scanner`.
+- Ajustar `working-directory` conforme o job: `core`, `packages/python`, `packages/worker`, `scanner`.
 
 ## Formato do .task-state.json
 
@@ -100,7 +164,11 @@ Exemplos de uso nas etapas do ciclo:
 
 - [ ] `.task-state.json` atualizado com todos os TODOs
 - [ ] `check-todos` retornando `ok: true`
-- [ ] `workflow-agent` retornando `workflow_finished status:success` para todos os jobs locais relevantes
-- [ ] Nenhuma nova issue BLOCKER/CRITICAL no SonarCloud (verificado via MCP)
-- [ ] Cobertura de novo código ≥ 80% (verificado via MCP, se aplicável)
-- [ ] Resumo final com: arquivos alterados, TODOs concluídos, cobertura disponível, resultado Sonar
+- [ ] `workflow-agent` retornando `workflow_finished status:success` para todos os jobs locais
+- [ ] Quality Gate: `OK`
+- [ ] `new_bugs` = 0 e `new_vulnerabilities` = 0
+- [ ] Nenhuma nova issue BLOCKER/CRITICAL
+- [ ] `new_coverage` ≥ 80%
+- [ ] `new_duplicated_lines_density` < 3%
+- [ ] Zero Security Hotspots `TO_REVIEW` pendentes
+- [ ] Resumo final com: arquivos alterados, TODOs concluídos, Quality Gate, métricas Sonar
