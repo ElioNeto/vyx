@@ -1,0 +1,26 @@
+{
+  "$schema": "https://opencode.ai/config.schema.json",
+  "mcp": {
+    "sonarqube": {
+      "type": "local",
+      "command": [
+        "docker",
+        "run",
+        "-i",
+        "--rm",
+        "--init",
+        "--pull=always",
+        "-e", "SONARQUBE_TOKEN",
+        "-e", "SONARQUBE_URL",
+        "-e", "SONARQUBE_ORG",
+        "mcp/sonarqube"
+      ],
+      "environment": {
+        "SONARQUBE_TOKEN": "${SONAR_TOKEN}",
+        "SONARQUBE_URL": "https://sonarcloud.io",
+        "SONARQUBE_ORG": "elioneto"
+      },
+      "enabled": true
+    }
+  }
+}
