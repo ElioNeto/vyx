@@ -300,7 +300,7 @@ describe('dispatch module - comprehensive coverage', () => {
       header.writeUInt8(0x01, 4);
       const invalidFrame = Buffer.concat([header, invalidPayload]);
       writes.length = 0;
-      handleSocketData(socket, invalidFrame, bufferRef, 'test-worker');
+      const result = handleSocketData(socket, invalidFrame, bufferRef, 'test-worker');
       expect(result).toBeDefined();
     });
 
