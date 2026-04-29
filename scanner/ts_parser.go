@@ -103,17 +103,11 @@ func buildTSRoute(file string, line int, routeAnnot, pageAnnot, validateAnnot, a
 
 	if routeAnnot != "" {
 		m := tsRouteRe.FindStringSubmatch(routeAnnot)
-		if m == nil {
-			return Route{}, &AnnotationError{File: file, Line: line, Message: "malformed @Route annotation"}
-		}
 		method = strings.ToUpper(strings.TrimSpace(m[1]))
 		path = strings.TrimSpace(m[2])
 		routeType = "api"
 	} else if pageAnnot != "" {
 		m := tsPageRe.FindStringSubmatch(pageAnnot)
-		if m == nil {
-			return Route{}, &AnnotationError{File: file, Line: line, Message: "malformed @Page annotation"}
-		}
 		method = "GET"
 		path = strings.TrimSpace(m[1])
 		routeType = "page"

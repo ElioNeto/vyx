@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestParseTSFile(t *testing.T) {
@@ -43,4 +45,25 @@ export default function DashboardPage() {}
 	if r1.Method != "GET" || r1.Path != "/dashboard" || r1.Type != "page" {
 		t.Errorf("unexpected page route: %+v", r1)
 	}
+}
+
+func TestParseTSFile_FileOpenError(t *testing.T) {
+	// Create a file with no read permissions
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "noaccess.ts")
+	os.WriteFile(path, []byte("test"), 0000)
+	defer os.Chmod(path, 0644) // Restore permissions for cleanup
+
+	routes, errs := parseTSFile(path, "node:bad")
+	assert.Empty(t, routes)
+	assert.Len(t, errs, 1)
+	assert.Contains(t, errs[0].Message, "cannot open file")
+}
+
+func TestParseTSFiles_WalkError(t *testing.T) {
+	// ParseTSFiles on non-existent path should not panic
+	routes, errs := ParseTSFiles("/nonexistent/path/12345", "node:test")
+	// Both should be empty slices (not nil)
+	assert.Equal(t, 0, len(routes))
+	assert.Equal(t, 0, len(errs))
 }

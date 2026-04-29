@@ -388,16 +388,24 @@ describe('dispatch module - comprehensive coverage', () => {
   });
 
   describe('createAndSetupSocket with shouldExit=false', () => {
-    it('should create socket without exit on close when shouldExit is false', (done) => {
+    it('should create socket without exit on close when shouldExit is false', () => {
+      // Set VYX_TEST_MODE to prevent exit
+      process.env.VYX_TEST_MODE = 'true';
+      
       // Create a mock socket that immediately closes
       const socket = createAndSetupSocket('/tmp/nonexistent.sock', 'test-worker', [], false);
       
-      socket.on('close', () => {
-        // Should not exit when shouldExit is false
-        done();
+      // Use waitFor to handle async callback
+      return new Promise<void>((resolve) => {
+        socket.on('close', () => {
+          // Should not exit when shouldExit is false
+          resolve();
+        });
+        
+        socket.destroy();
+      }).finally(() => {
+        delete process.env.VYX_TEST_MODE;
       });
-      
-      socket.destroy();
     });
   });
 
@@ -487,23 +495,26 @@ describe('handleSocketConnect', () => {
       expect(() => socket.emit('error', err)).not.toThrow();
     });
 
-    it('should handle socket close event without exit when shouldExit is false', (done) => {
+    it('should handle socket close event without exit when shouldExit is false', () => {
       const socket = new net.Socket();
       const workerId = 'test-worker';
       
       setupSocketHandlers(socket, workerId, false);
       
-      socket.on('close', () => {
-        // Should reach here without exiting
-        done();
+      // Use waitFor to handle async callback
+      return new Promise<void>((resolve) => {
+        socket.on('close', () => {
+          // Should reach here without exiting
+          resolve();
+        });
+        
+        socket.emit('close');
       });
-      
-      socket.emit('close');
     }, 100);
   });
   
   describe('createAndSetupSocket', () => {
-    it('should call callback on connect', (done) => {
+    it('should call callback on connect', () => {
       const socketPath = '/tmp/nonexistent-test.sock';
       const workerId = 'test-worker';
       
@@ -515,10 +526,9 @@ describe('handleSocketConnect', () => {
       
       // Cleanup
       socket.destroy();
-      done();
     }, 100);
 
-    it('should send handshake and heartbeat on connect', (done) => {
+    it('should send handshake and heartbeat on connect', () => {
       const writes: Buffer[] = [];
       const mockSocket = {
         write: (buf: Buffer) => { writes.push(buf); return true; },
@@ -537,7 +547,6 @@ describe('handleSocketConnect', () => {
       const result = createAndSetupSocket('/tmp/test.sock', 'test', [{path: '/api', method: 'GET'}], false);
       expect(result).toBeDefined();
       result.destroy();
-      done();
     }, 100);
   });
 
@@ -586,8 +595,83 @@ describe('handleSocketConnect', () => {
       header.writeUInt8(0x01, 4); // TYPE_REQUEST
       const frame = Buffer.concat([header, payloadBuf]);
       
-      const result = handleSocketData(mockSocket, frame, bufferRef, 'test-worker');
+       const result = handleSocketData(mockSocket, frame, bufferRef, 'test-worker');
+       expect(result).toBeDefined();
+     });
+  });
+
+  describe('signal handlers and cleanup', () => {
+    it('should setup process handlers without error', () => {
+      const socketPath = '/tmp/test-signal-setup.sock';
+      const workerId = 'test-signal';
+      const routes: RouteRegistration[] = [];
+      
+      // This should not throw
+      expect(() => {
+        const socket = createAndSetupSocket(socketPath, workerId, routes, true);
+        socket.destroy();
+      }).not.toThrow();
+    });
+
+    it('should cleanup on SIGTERM when shouldExit is true', () => {
+      // Set VYX_TEST_MODE to prevent actual exit
+      process.env.VYX_TEST_MODE = 'true';
+      
+      const socketPath = '/tmp/test-sigterm.sock';
+      const workerId = 'test-sigterm';
+      const routes: RouteRegistration[] = [];
+      
+      const socket = createAndSetupSocket(socketPath, workerId, routes, true);
+      expect(socket).toBeDefined();
+      
+      // Emit SIGTERM - cleanup should be called
+      process.emit('SIGTERM');
+      
+      delete process.env.VYX_TEST_MODE;
+      socket.destroy();
+    });
+
+    it('should cleanup on SIGINT when shouldExit is true', () => {
+      // Set VYX_TEST_MODE to prevent actual exit
+      process.env.VYX_TEST_MODE = 'true';
+      
+      const socketPath = '/tmp/test-sigint.sock';
+      const workerId = 'test-sigint';
+      const routes: RouteRegistration[] = [];
+      
+      const socket = createAndSetupSocket(socketPath, workerId, routes, true);
+      expect(socket).toBeDefined();
+      
+      // Emit SIGINT - cleanup should be called
+      process.emit('SIGINT');
+      
+      delete process.env.VYX_TEST_MODE;
+      socket.destroy();
+    });
+
+    it('should handle data events and update bufferRef', () => {
+      const bufferRef: { current: Buffer } = { current: Buffer.alloc(0) };
+      const writes: Buffer[] = [];
+      const mockSocket = {
+        write: (buf: Buffer) => { writes.push(buf); return true; },
+        on: function(event: string, handler: Function) {
+          if (event === 'data') {
+            // Simulate data event with a proper frame
+            const payload = JSON.stringify({ method: 'GET', path: '/test' });
+            const payloadBuf = Buffer.from(payload);
+            const header = Buffer.alloc(5);
+            header.writeUInt32LE(payloadBuf.length, 0);
+            header.writeUInt8(0x01, 4); // TYPE_REQUEST
+            handler(Buffer.concat([header, payloadBuf]));
+          }
+          return this;
+        },
+        destroy: () => {},
+      } as unknown as net.Socket;
+
+      const result = handleSocketData(mockSocket, Buffer.alloc(0), bufferRef, 'test-worker');
       expect(result).toBeDefined();
+      expect(bufferRef.current).toBeDefined();
     });
   });
 });

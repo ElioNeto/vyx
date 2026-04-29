@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestParseGoFile(t *testing.T) {
@@ -46,4 +48,16 @@ func ListUsers() {}
 	if r1.Method != "GET" || r1.Path != "/api/users" {
 		t.Errorf("unexpected route: %+v", r1)
 	}
+}
+
+func TestParseGoFile_FileOpenError(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "noaccess.go")
+	os.WriteFile(path, []byte("package main"), 0000)
+	defer os.Chmod(path, 0644)
+
+	routes, errs := parseGoFile(path, "go:bad")
+	assert.Empty(t, routes)
+	assert.Len(t, errs, 1)
+	assert.Contains(t, errs[0].Message, "cannot open file")
 }

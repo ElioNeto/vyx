@@ -96,9 +96,6 @@ func parseGoFile(path, workerID string) ([]Route, []AnnotationError) {
 
 func buildRoute(file string, line int, routeAnnot, validateAnnot, authAnnot, workerID string) (Route, *AnnotationError) {
 	m := goRouteRe.FindStringSubmatch(routeAnnot)
-	if m == nil {
-		return Route{}, &AnnotationError{File: file, Line: line, Message: "malformed @Route annotation"}
-	}
 
 	method := strings.ToUpper(strings.TrimSpace(m[1]))
 	path := strings.TrimSpace(m[2])

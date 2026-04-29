@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/ElioNeto/vyx/scanner"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func writeTSX(t *testing.T, dir, name, content string) {
@@ -96,4 +98,83 @@ func TestParseTSXFiles_NonTSXFilesIgnored(t *testing.T) {
 	if len(routes) != 0 {
 		t.Fatalf("expected no routes from non-tsx file, got %d", len(routes))
 	}
+}
+
+func TestParseTSXFile_WithAuthAndValidate(t *testing.T) {
+	dir := t.TempDir()
+	writeTSX(t, dir, "Profile.tsx", `
+// @Page(/profile)
+// @Auth(roles: ["user"])
+export default function ProfilePage() {}
+`)
+	routes, errs := scanner.ParseTSXFiles(dir, "node:ssr")
+	assert.Len(t, errs, 0)
+	assert.Len(t, routes, 1)
+	assert.Equal(t, "/profile", routes[0].Path)
+	assert.Equal(t, []string{"user"}, routes[0].AuthRoles)
+}
+
+func TestParseTSXFile_TwoPagesInOneFile(t *testing.T) {
+	dir := t.TempDir()
+	writeTSX(t, dir, "Pages.tsx", `
+// @Page(/a)
+export default function A() { return null }
+// @Page(/b)
+export default function B() { return null }
+`)
+	routes, errs := scanner.ParseTSXFiles(dir, "node:ssr")
+	assert.Len(t, errs, 0)
+	assert.Len(t, routes, 2)
+	assert.Equal(t, "/a", routes[0].Path)
+	assert.Equal(t, "/b", routes[1].Path)
+}
+
+func TestParseTSXFile_NonAnnotationLineFlushes(t *testing.T) {
+	dir := t.TempDir()
+	writeTSX(t, dir, "Flush.tsx", `
+// @Page(/flush)
+const x = 1
+export default function FlushPage() { return null }
+`)
+	routes, errs := scanner.ParseTSXFiles(dir, "node:ssr")
+	assert.Len(t, errs, 0)
+	assert.Len(t, routes, 1)
+	assert.Equal(t, "/flush", routes[0].Path)
+}
+
+func TestParseTSXFile_PageAtEOF(t *testing.T) {
+	dir := t.TempDir()
+	// Page is last line of file (no trailing newline or non-annotation lines)
+	writeTSX(t, dir, "EOF.tsx", `// @Page(/eof)`)
+	routes, errs := scanner.ParseTSXFiles(dir, "node:ssr")
+	assert.Len(t, errs, 0)
+	assert.Len(t, routes, 1)
+	assert.Equal(t, "/eof", routes[0].Path)
+}
+
+func TestParseTSXFile_UnreadableFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "noaccess.tsx")
+	// Create a .tsx file with no read permissions
+	require.NoError(t, os.WriteFile(path, []byte(`// @Page(/secret)`), 0000))
+	defer os.Chmod(path, 0644) // Restore permissions for cleanup
+
+	// Walk should skip unreadable files, so no routes or errors
+	routes, errs := scanner.ParseTSXFiles(dir, "node:ssr")
+	assert.Len(t, errs, 0)
+	assert.Len(t, routes, 0)
+}
+
+func TestParseTSXFile_MultipleAuthRoles(t *testing.T) {
+	dir := t.TempDir()
+	writeTSX(t, dir, "Roles.tsx", `
+// @Page(/roles)
+// @Auth(roles: ["admin", "superuser", "user"])
+export default function RolesPage() { return null }
+`)
+	routes, errs := scanner.ParseTSXFiles(dir, "node:ssr")
+	assert.Len(t, errs, 0)
+	assert.Len(t, routes, 1)
+	assert.Equal(t, []string{"admin", "superuser", "user"}, routes[0].AuthRoles)
 }

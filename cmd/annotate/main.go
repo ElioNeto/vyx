@@ -19,9 +19,7 @@ func main() {
 	output := flag.String("output", "route_map.json", "Output path for the generated route map")
 	flag.Parse()
 
-	fmt.Println("vyx annotate: scanning for route annotations...")
-
-	errs, err := scanner.Generate(*goDir, *tsDir, *pyDir, *frontendDir, *output)
+	errs, err := run(*goDir, *tsDir, *pyDir, *frontendDir, *output)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fatal: %v\n", err)
 		os.Exit(1)
@@ -36,4 +34,17 @@ func main() {
 	}
 
 	fmt.Printf("route_map.json written to %s\n", *output)
+}
+
+// run contains the core annotation logic, extracted for testability
+func run(goDir, tsDir, pyDir, frontendDir, output string) ([]error, error) {
+	fmt.Println("vyx annotate: scanning for route annotations...")
+	annotationErrs, err := scanner.Generate(goDir, tsDir, pyDir, frontendDir, output)
+	
+	// Convert []scanner.AnnotationError to []error (AnnotationError implements error via pointer receiver)
+	errs := make([]error, len(annotationErrs))
+	for i := range annotationErrs {
+		errs[i] = &annotationErrs[i] // Use pointer to get *AnnotationError which has Error() method
+	}
+	return errs, err
 }

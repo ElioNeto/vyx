@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestParsePyFile(t *testing.T) {
@@ -52,4 +54,16 @@ def list_orders():
 	if r1.Method != "GET" || r1.Path != "/api/orders" {
 		t.Errorf("unexpected route: %+v", r1)
 	}
+}
+
+func TestParsePyFile_FileOpenError(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "noaccess.py")
+	os.WriteFile(path, []byte("# test"), 0000)
+	defer os.Chmod(path, 0644)
+
+	routes, errs := parsePyFile(path, "python:bad")
+	assert.Empty(t, routes)
+	assert.Len(t, errs, 1)
+	assert.Contains(t, errs[0].Message, "cannot open file")
 }
