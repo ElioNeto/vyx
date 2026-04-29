@@ -393,10 +393,11 @@ describe('dispatch module - comprehensive coverage', () => {
       const invalidFrame = Buffer.concat([header, invalidPayload]);
 
       writes.length = 0;
-      handleSocketData(socket, invalidFrame, bufferRef, 'test-worker');
-
-      // Should not crash, and buffer should be updated
-      // The function should catch the JSON parse error
+      // handleSocketData expects a buffer - pass the frame as buffer
+      const result = handleSocketData(socket, invalidFrame, bufferRef, 'test-worker');
+      
+      // Should not crash - error is logged to console
+      expect(result).toBeDefined();
     });
 
     it('should handle unknown message type', () => {
