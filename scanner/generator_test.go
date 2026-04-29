@@ -105,7 +105,41 @@ func health() {}
 	}
 }
 
-func TestGenerate_MkdirAllError(t *testing.T) {
+func TestGenerate_JsonMarshalSuccess(t *testing.T) {
+	tmpDir := t.TempDir()
+	goDir := filepath.Join(tmpDir, "go")
+	if err := os.MkdirAll(goDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	goSrc := `// @Route(GET /api/test)
+func handler() {}
+`
+	if err := os.WriteFile(filepath.Join(goDir, "test.go"), []byte(goSrc), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	outputPath := filepath.Join(tmpDir, "route_map.json")
+	errs, err := Generate(goDir, "", "", "", outputPath)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var rm map[string]interface{}
+	if err := json.Unmarshal(data, &rm); err != nil {
+		t.Fatalf("invalid JSON written: %v", err)
+	}
+}
+
+func TestGenerate_NestedOutputDir(t *testing.T) {
 	tmpDir := t.TempDir()
 	goDir := filepath.Join(tmpDir, "go")
 	if err := os.MkdirAll(goDir, 0755); err != nil {
@@ -119,12 +153,19 @@ func health() {}
 		t.Fatal(err)
 	}
 
-	// Use an invalid output path (e.g., in a non-existent root)
-	outputPath := "/nonexistent/deep/path/route_map.json"
+	// Create nested output path - Generate should create parent dirs
+	outputPath := filepath.Join(tmpDir, "deep", "nested", "route_map.json")
 
-	_, err := Generate(goDir, "", "", "", outputPath)
-	if err == nil {
-		t.Fatal("expected MkdirAll error")
+	errs, err := Generate(goDir, "", "", "", outputPath)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+
+	if _, err := os.Stat(outputPath); os.IsNotExist(err) {
+		t.Fatal("output file was not created")
 	}
 }
 
@@ -151,12 +192,11 @@ func bad() {}
 	}
 
 	// Should have validation errors (invalid route syntax)
-	// Note: depending on implementation, may or may not return errors
-	t.Logf("Validation errors: %v", errs)
+	if len(errs) == 0 {
+		t.Fatal("expected validation errors for invalid route syntax")
+	}
 }
 
-// TestGenerate_MarshalError is hard to trigger since json.Marshal rarely fails
-// Instead we test the success flow with multiple route types
 func TestGenerate_MultipleRouteTypes(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -203,47 +243,5 @@ func dataHandler() {}
 	routes, ok := routeMap["routes"].([]interface{})
 	if !ok || len(routes) == 0 {
 		t.Fatal("expected routes in output")
-	}
-}
-
-// TestGenerate_MarshalError is hard to trigger since json.Marshal rarely fails
-// but we can test the flow with valid data to ensure coverage
-func TestGenerate_SuccessFlow(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Create Go route
-	goDir := filepath.Join(tmpDir, "go")
-	if err := os.MkdirAll(goDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	goSrc := `// @Route(GET /api/test)
-// @Auth(roles: ["admin"])
-func testHandler() {}
-`
-	if err := os.WriteFile(filepath.Join(goDir, "test.go"), []byte(goSrc), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	outputPath := filepath.Join(tmpDir, "route_map.json")
-
-	errs, err := Generate(goDir, "", "", "", outputPath)
-	if err != nil {
-		t.Fatalf("Generate failed: %v", err)
-	}
-
-	if len(errs) > 0 {
-		t.Fatalf("unexpected errors: %v", errs)
-	}
-
-	// Verify output is valid JSON
-	data, err := os.ReadFile(outputPath)
-	if err != nil {
-		t.Fatalf("failed to read: %v", err)
-	}
-
-	var routeMap map[string]interface{}
-	if err := json.Unmarshal(data, &routeMap); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
 	}
 }
