@@ -169,8 +169,8 @@ export interface WorkerOptions {
   capabilities?: Array<{ path: string; method: string }>;
 }
 
-export function start(options: WorkerOptions): void {
-  const socketPath =
+export function getSocketPath(options: WorkerOptions): string {
+  return (
     options.socketPath ??
     (process.platform === 'win32'
       ? String.raw`\\.\pipe\vyx-${options.workerId}`
@@ -183,7 +183,12 @@ export function start(options: WorkerOptions): void {
           const safeDir = path.join(os.homedir(), '.vyx', 'sockets');
           fs.mkdirSync(safeDir, { recursive: true, mode: 0o700 });
           return path.join(safeDir, `vyx-${options.workerId}.sock`);
-        })());
+        })())
+  );
+}
+
+export function start(options: WorkerOptions): void {
+  const socketPath = getSocketPath(options);
 
   console.log(`[${options.workerId}] connecting to ${socketPath}`);
 
@@ -202,39 +207,11 @@ export function start(options: WorkerOptions): void {
     console.log(`[${options.workerId}] initial heartbeat sent`);
   });
 
-  let buffer: any = Buffer.alloc(0);
+  const bufferRef: { current: Buffer } = { current: Buffer.alloc(0) };
 
-  socket.on('data', (data: any) => {
-    buffer = Buffer.concat([buffer, data]);
-    const result = parseFrames(buffer);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    buffer = result.remaining as any;
-
-    for (const { msgType, payload } of result.frames) {
-      switch (msgType) {
-        case TYPE_HEARTBEAT:
-          writeFrame(socket, TYPE_HEARTBEAT, null);
-          break;
-
-        case TYPE_REQUEST: {
-          let req: IPCPayload;
-          try {
-            req = JSON.parse(payload.toString());
-          } catch (e) {
-            console.error(`[${options.workerId}] failed to parse request:`, e);
-            break;
-          }
-          console.log(`[${options.workerId}] ${req.method} ${req.path}`);
-          dispatch(req).then((resp) => {
-            writeFrame(socket, TYPE_RESPONSE, resp);
-          });
-          break;
-        }
-
-        default:
-          break;
-      }
-    }
+  socket.on('data', (data: Buffer) => {
+    const result = handleSocketData(socket, data, bufferRef, options.workerId);
+    bufferRef.current = result.remaining;
   });
 
   socket.on('error', (err) =>
@@ -258,3 +235,48 @@ export function start(options: WorkerOptions): void {
     process.exit(0);
   });
 }
+
+export interface HandleSocketDataResult {
+  remaining: Buffer;
+}
+
+export function handleSocketData(
+  socket: net.Socket,
+  data: Buffer,
+  bufferRef: { current: Buffer },
+  workerId: string
+): HandleSocketDataResult {
+  bufferRef.current = Buffer.concat([bufferRef.current, data]);
+  const result = parseFrames(bufferRef.current);
+
+  for (const { msgType, payload } of result.frames) {
+    switch (msgType) {
+      case TYPE_HEARTBEAT:
+        writeFrame(socket, TYPE_HEARTBEAT, null);
+        break;
+
+      case TYPE_REQUEST: {
+        let req: IPCPayload;
+        try {
+          req = JSON.parse(payload.toString());
+        } catch (e) {
+          console.error(`[${workerId}] failed to parse request:`, e);
+          break;
+        }
+        console.log(`[${workerId}] ${req.method} ${req.path}`);
+        dispatch(req).then((resp) => {
+          writeFrame(socket, TYPE_RESPONSE, resp);
+        });
+        break;
+      }
+
+      default:
+        break;
+    }
+  }
+
+  return { remaining: result.remaining };
+}
+
+// Exported for testing purposes
+export { dispatch, matchRoute, writeFrame, parseFrames };
