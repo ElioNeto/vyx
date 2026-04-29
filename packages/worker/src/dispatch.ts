@@ -238,11 +238,8 @@ export function setupSocketHandlers(
   );
   socket.on('close', () => {
     // Don't exit in test mode or if VYX_TEST_MODE is set
-    if (!shouldExit || process.env.VYX_TEST_MODE) {
-      return;
-    }
-    if (process.listenerCount('close') > 1) {
-      // Only exit if we're the only listener (not in test)
+    const isTestMode = !shouldExit || process.env.VYX_TEST_MODE || process.env.JEST_WORKER_ID;
+    if (isTestMode) {
       return;
     }
     console.log(`[${workerId}] disconnected`);
