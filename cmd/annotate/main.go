@@ -12,10 +12,17 @@ import (
 )
 
 func main() {
-	if err := runMain("backend/go", "backend/node", "backend/python", "frontend/src", "route_map.json"); err != nil {
+	os.Exit(runMainWithExit("backend/go", "backend/node", "backend/python", "frontend/src", "route_map.json"))
+}
+
+// runMainWithExit contains the main logic and returns an exit code for testability.
+// Returns 0 on success, 1 on error.
+func runMainWithExit(goDir, tsDir, pyDir, frontendDir, output string) int {
+	if err := runMain(goDir, tsDir, pyDir, frontendDir, output); err != nil {
 		fmt.Fprintf(os.Stderr, "fatal: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 // runMain contains the main logic, extracted for testability.
