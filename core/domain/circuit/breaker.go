@@ -41,6 +41,7 @@ type Breaker struct {
 	lastFailure  time.Time
 	openedAt     time.Time
 	halfOpenProbes int
+	routeID      string
 
 	config        Config
 	onStateChange func(StateChange)
@@ -60,7 +61,7 @@ func New(cfg Config, onStateChange func(StateChange)) *Breaker {
 		cfg.Cooldown = 30 * time.Second
 	}
 	if cfg.HalfOpenMax == 0 {
-		cfg.HalfOpenMax = 3
+		cfg.HalfOpenMax = 1 // Default to 1 probe as per spec
 	}
 	return &Breaker{
 		config:        cfg,
@@ -69,16 +70,24 @@ func New(cfg Config, onStateChange func(StateChange)) *Breaker {
 	}
 }
 
+// SetRouteID sets the route identifier for this breaker.
+func (b *Breaker) SetRouteID(routeID string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.routeID = routeID
+}
+
 func (b *Breaker) RecordSuccess() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	switch b.state {
 	case StateHalfOpen:
+		from := b.state
 		b.state = StateClosed
 		b.failures = 0
 		b.halfOpenProbes = 0
-		b.emit(StateClosed, "probe succeeded")
+		b.emit(from, StateClosed, "probe succeeded")
 	case StateClosed:
 		b.failures = 0
 	case StateOpen:
@@ -95,14 +104,16 @@ func (b *Breaker) RecordFailure() {
 	switch b.state {
 	case StateClosed:
 		if b.failures >= b.config.Failures {
+			from := b.state
 			b.state = StateOpen
 			b.openedAt = time.Now()
-			b.emit(StateOpen, "consecutive failures")
+			b.emit(from, StateOpen, "consecutive failures")
 		}
 	case StateHalfOpen:
+		from := b.state
 		b.state = StateOpen
 		b.halfOpenProbes = 0
-		b.emit(StateOpen, "half-open probe failed")
+		b.emit(from, StateOpen, "half-open probe failed")
 	case StateOpen:
 	}
 }
@@ -116,9 +127,10 @@ func (b *Breaker) Allow() bool {
 		return true
 	case StateOpen:
 		if time.Since(b.openedAt) >= b.config.Cooldown {
+			from := b.state
 			b.state = StateHalfOpen
 			b.halfOpenProbes = 0
-			b.emit(StateHalfOpen, "cooldown expired")
+			b.emit(from, StateHalfOpen, "cooldown expired")
 			return true
 		}
 		return false
@@ -151,13 +163,14 @@ func (b *Breaker) Stats() (state State, failures int, lastFailure time.Time) {
 	return b.state, b.failures, b.lastFailure
 }
 
-func (b *Breaker) emit(to State, reason string) {
+func (b *Breaker) emit(from State, to State, reason string) {
 	if b.onStateChange != nil {
 		b.onStateChange(StateChange{
-			From:   b.state,
-			To:     to,
-			Reason: reason,
-			Time:   time.Now(),
+			From:    from,
+			To:      to,
+			Reason:  reason,
+			RouteID: b.routeID,
+			Time:    time.Now(),
 		})
 	}
 }
@@ -194,6 +207,7 @@ func (r *Registry) Get(routeID string) *Breaker {
 	}
 
 	b = New(r.config, r.log)
+	b.SetRouteID(routeID)
 	r.breakers[routeID] = b
 	return b
 }
