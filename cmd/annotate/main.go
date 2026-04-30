@@ -12,10 +12,21 @@ import (
 )
 
 func main() {
-	if err := runAnnotate(); err != nil {
+	if err := runMain("backend/go", "backend/node", "backend/python", "frontend/src", "route_map.json"); err != nil {
 		fmt.Fprintf(os.Stderr, "fatal: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// runMain contains the main logic, extracted for testability.
+func runMain(goDir, tsDir, pyDir, frontendDir, output string) error {
+	return runAnnotateWithFlags(goDir, tsDir, pyDir, frontendDir, output)
+}
+
+// TestMain is exported for testing main() behavior.
+// It simulates what main() does but returns error instead of calling os.Exit.
+func TestMain() error {
+	return runMain("backend/go", "backend/node", "backend/python", "frontend/src", "route_map.json")
 }
 
 // runAnnotate contains the CLI logic, extracted for testability
@@ -46,17 +57,4 @@ func runAnnotateWithFlags(goDir, tsDir, pyDir, frontendDir, output string) error
 
 	fmt.Printf("route_map.json written to %s\n", output)
 	return nil
-}
-
-// run contains the core annotation logic, extracted for testability
-func run(goDir, tsDir, pyDir, frontendDir, output string) ([]error, error) {
-	fmt.Println("vyx annotate: scanning for route annotations...")
-	annotationErrs, err := scanner.Generate(goDir, tsDir, pyDir, frontendDir, output)
-
-	// Convert []scanner.AnnotationError to []error
-	errs := make([]error, len(annotationErrs))
-	for i := range annotationErrs {
-		errs[i] = &annotationErrs[i]
-	}
-	return errs, err
 }

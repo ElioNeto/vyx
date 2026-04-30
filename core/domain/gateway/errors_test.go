@@ -25,6 +25,42 @@ func TestValidationError_Error(t *testing.T) {
 	}
 }
 
+// Test Error() with field only (no message) - covers line 38
+func TestValidationError_Error_FieldOnly(t *testing.T) {
+	ve := &dgw.ValidationError{
+		Details: []dgw.ValidationDetail{
+			{Field: "username"},
+		},
+	}
+
+	errStr := ve.Error()
+	if errStr == "" {
+		t.Error("Error() should not return empty string")
+	}
+	// Should contain the field name
+	if !contains(errStr, "username") {
+		t.Errorf("Error() should contain field name, got %q", errStr)
+	}
+}
+
+// Test Error() with message only (no field) - covers line 40
+func TestValidationError_Error_MessageOnly(t *testing.T) {
+	ve := &dgw.ValidationError{
+		Details: []dgw.ValidationDetail{
+			{Message: "something went wrong"},
+		},
+	}
+
+	errStr := ve.Error()
+	if errStr == "" {
+		t.Error("Error() should not return empty string")
+	}
+	// Should contain the message
+	if !contains(errStr, "something went wrong") {
+		t.Errorf("Error() should contain message, got %q", errStr)
+	}
+}
+
 func TestValidationError_MarshalJSON(t *testing.T) {
 	ve := &dgw.ValidationError{
 		Details: []dgw.ValidationDetail{
@@ -244,4 +280,14 @@ func TestGatewayResponse_EmptyFields(t *testing.T) {
 	if resp.Body != nil {
 		t.Errorf("expected nil body")
 	}
+}
+
+// Helper to check if string contains substring
+func contains(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
