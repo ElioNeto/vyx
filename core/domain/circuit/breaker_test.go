@@ -112,8 +112,8 @@ func TestBreaker_DecrementFailuresOnSuccess(t *testing.T) {
 
 	b.RecordSuccess()
 
-	if b.Failures() != 1 {
-		t.Errorf("expected 1 failure after success, got %d", b.Failures())
+	if b.Failures() != 0 {
+		t.Errorf("expected 0 failures after success, got %d", b.Failures())
 	}
 }
 

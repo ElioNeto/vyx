@@ -80,9 +80,7 @@ func (b *Breaker) RecordSuccess() {
 		b.halfOpenProbes = 0
 		b.emit(StateClosed, "probe succeeded")
 	case StateClosed:
-		if b.failures > 0 {
-			b.failures--
-		}
+		b.failures = 0
 	case StateOpen:
 	}
 }
@@ -125,8 +123,7 @@ func (b *Breaker) Allow() bool {
 		}
 		return false
 	case StateHalfOpen:
-		// Check limit first, then increment - so with HalfOpenMax=2,
-		// we allow probe 1 and 2, block probe 3
+		// Allow up to HalfOpenMax probes
 		if b.halfOpenProbes < b.config.HalfOpenMax {
 			b.halfOpenProbes++
 			return true
