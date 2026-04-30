@@ -23,6 +23,7 @@ type LogWriter func(workerID string, line string)
 type Manager struct {
 	mu               sync.RWMutex
 	processes        map[string]*exec.Cmd
+	waitDone         map[string]chan struct{}
 	logWriter        LogWriter
 	shutdownTimeout  time.Duration
 }
@@ -32,6 +33,7 @@ type Manager struct {
 func New(opts ...Option) *Manager {
 	m := &Manager{
 		processes: make(map[string]*exec.Cmd),
+		waitDone:  make(map[string]chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -97,10 +99,13 @@ func (m *Manager) Spawn(ctx context.Context, w *worker.Worker) error {
 
 	m.mu.Lock()
 	m.processes[w.ID] = cmd
+	waitCh := make(chan struct{})
+	m.waitDone[w.ID] = waitCh
 	m.mu.Unlock()
 
 	go func() {
 		_ = cmd.Wait()
+		close(waitCh)
 	}()
 
 	return nil
@@ -147,10 +152,11 @@ func (m *Manager) processBufferChunk(writer LogWriter, workerID string, buf []by
 // Falls back to kill after the shutdown timeout.
 func (m *Manager) Stop(ctx context.Context, id string) error {
 	m.mu.RLock()
-	cmd, ok := m.processes[id]
+	cmd, cmdOk := m.processes[id]
+	waitCh, waitOk := m.waitDone[id]
 	m.mu.RUnlock()
 
-	if !ok || cmd.Process == nil {
+	if !cmdOk || cmd.Process == nil {
 		return worker.ErrNotFound
 	}
 
@@ -158,25 +164,27 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 		return err
 	}
 
-	done := make(chan struct{})
-	go func() {
-		_ = cmd.Wait()
-		close(done)
-	}()
-
 	timeout := defaultShutdownTimeout
 	if m.shutdownTimeout > 0 {
 		timeout = m.shutdownTimeout
 	}
-	select {
-	case <-done:
-	case <-time.After(timeout):
-		_ = killProcess(cmd)
-		return worker.ErrStopTimeout
+
+	if waitOk {
+		select {
+		case <-waitCh:
+		case <-time.After(timeout):
+			_ = killProcess(cmd)
+			m.mu.Lock()
+			delete(m.processes, id)
+			delete(m.waitDone, id)
+			m.mu.Unlock()
+			return worker.ErrStopTimeout
+		}
 	}
 
 	m.mu.Lock()
 	delete(m.processes, id)
+	delete(m.waitDone, id)
 	m.mu.Unlock()
 
 	return nil

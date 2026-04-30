@@ -47,3 +47,16 @@ func runAnnotateWithFlags(goDir, tsDir, pyDir, frontendDir, output string) error
 	fmt.Printf("route_map.json written to %s\n", output)
 	return nil
 }
+
+// run contains the core annotation logic, extracted for testability
+func run(goDir, tsDir, pyDir, frontendDir, output string) ([]error, error) {
+	fmt.Println("vyx annotate: scanning for route annotations...")
+	annotationErrs, err := scanner.Generate(goDir, tsDir, pyDir, frontendDir, output)
+
+	// Convert []scanner.AnnotationError to []error
+	errs := make([]error, len(annotationErrs))
+	for i := range annotationErrs {
+		errs[i] = &annotationErrs[i]
+	}
+	return errs, err
+}
