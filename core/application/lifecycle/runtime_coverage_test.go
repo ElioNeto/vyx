@@ -228,3 +228,27 @@ func TestRestartWorker_StoppedWorker(t *testing.T) {
 		t.Fatalf("RestartWorker failed: %v", err)
 	}
 }
+
+// TestSpawnWorker_RuntimeResolveFails tests runtime.Resolve failure.
+func TestSpawnWorker_RuntimeResolveFails(t *testing.T) {
+	// Ensure VYX_SKIP_RUNTIME is not set
+	oldVal := os.Getenv("VYX_SKIP_RUNTIME")
+	defer os.Setenv("VYX_SKIP_RUNTIME", oldVal)
+	os.Unsetenv("VYX_SKIP_RUNTIME")
+	
+	mgr := &mockManager{}
+	svc, _ := newTestServiceNoSkip(mgr)
+	
+	// Use "node" which will trigger NeedsProvisioning=true
+	// but runtime.Ensure will fail in test env
+	_, err := svc.SpawnWorker(context.Background(), lifecycle.SpawnWorkerConfig{
+		ID:      "w1",
+		Command: "node",
+	})
+	
+	// We expect some error from runtime provisioning
+	if err == nil {
+		t.Error("expected error from runtime.Resolve failure")
+	}
+	t.Logf("Got expected error: %v", err)
+}

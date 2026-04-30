@@ -98,5 +98,23 @@ func TestCleanup_RemovesDrainingState(t *testing.T) {
 	if drainer.IsDraining(workerID) {
 		t.Errorf("expected IsDraining to be false after Cleanup")
 	}
-	// Note: IsDraining only checks the draining map, not inflight.
+}
+
+// TestRelease_NoAcquire verifies Release on non-acquired worker does not panic.
+func TestRelease_NoAcquire(t *testing.T) {
+	drainer := lifecycle.NewWorkerDrainer()
+	
+	// Release without Acquire - should not panic
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		drainer.Release("nonexistent-worker")
+	}()
+	
+	select {
+	case <-done:
+		// OK
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Release blocked or panicked")
+	}
 }

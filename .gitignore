@@ -96,3 +96,4 @@ hello-world-go-worker
 coverage*.txt
 coverage*.xml
 coverage*.json
+coverage/

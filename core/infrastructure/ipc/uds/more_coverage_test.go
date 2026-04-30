@@ -214,3 +214,82 @@ func TestPlatformTransport(t *testing.T) {
 	// We can't easily test this directly
 	t.Skip("PlatformTransport is platform-specific")
 }
+
+// TestDeregister_WithActiveConnection tests Deregister when connection exists.
+func TestDeregister_WithActiveConnection(t *testing.T) {
+	dir := t.TempDir()
+	transport := New(dir)
+	defer transport.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	const workerID = "test-worker"
+
+	// Register and connect
+	if err := transport.Register(ctx, workerID); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	time.Sleep(10 * time.Millisecond)
+
+	sockPath := filepath.Join(dir, workerID+".sock")
+	client, err := Dial(ctx, sockPath)
+	if err != nil {
+		t.Fatalf("Dial() error = %v", err)
+	}
+	time.Sleep(10 * time.Millisecond)
+
+	// Now Deregister (should close connection and listener)
+	if err := transport.Deregister(ctx, workerID); err != nil {
+		t.Errorf("Deregister() error = %v", err)
+	}
+
+	client.Close()
+}
+
+// TestReceiveFrom_ContextCancelled tests context cancellation.
+func TestReceiveFrom_ContextCancelled(t *testing.T) {
+	dir := t.TempDir()
+	transport := New(dir)
+	defer transport.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	const workerID = "test-worker"
+	if err := transport.Register(ctx, workerID); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	time.Sleep(10 * time.Millisecond)
+
+	// Connect a client
+	sockPath := filepath.Join(dir, workerID+".sock")
+	client, err := Dial(ctx, sockPath)
+	if err != nil {
+		t.Fatalf("Dial() error = %v", err)
+	}
+	defer client.Close()
+	time.Sleep(20 * time.Millisecond)
+
+	// Try to receive with short timeout context
+	_, err = transport.Receive(ctx, workerID)
+	if err == nil {
+		t.Error("expected context cancellation error")
+	}
+	t.Logf("Got expected error: %v", err)
+}
+
+// TestRegister_MkdirFails tests when socket dir creation fails.
+func TestRegister_MkdirFails(t *testing.T) {
+	// Use a read-only parent dir to force mkdir error
+	dir := "/proc/invalid-subdir"
+	transport := New(dir)
+	defer transport.Close()
+
+	ctx := context.Background()
+	err := transport.Register(ctx, "worker1")
+	if err == nil {
+		t.Error("expected error from mkdir failure")
+	}
+	t.Logf("Got expected error: %v", err)
+}

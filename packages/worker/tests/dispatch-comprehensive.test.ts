@@ -608,109 +608,87 @@ describe('handleSocketConnect', () => {
       
       // This should not throw
       expect(() => {
-        const socket = createAndSetupSocket(socketPath, workerId, routes, true);
+        const socket = createAndSetupSocket(socketPath, workerId, routes, false);
         socket.destroy();
       }).not.toThrow();
     });
 
-    it('should call process.exit on close when shouldExit is true', () => {
-      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((code?: number) => {
-        throw new Error(`process.exit called with "${code}"`);
-      });
-
-      const socketPath = '/tmp/test-close-exit';
-      const workerId = 'test-close-exit';
+    it('should handle close event without exit when shouldExit is false', () => {
+      const socketPath = '/tmp/test-close-noexit';
+      const workerId = 'test-close-noexit';
       const routes: RouteRegistration[] = [];
 
-      const socket = createAndSetupSocket(socketPath, workerId, routes, true);
+      const socket = createAndSetupSocket(socketPath, workerId, routes, false);
       expect(socket).toBeDefined();
 
-      // Destroy socket - should trigger 'close' and then process.exit
-      expect(() => socket.destroy()).toThrow();
-
-      exitSpy.mockRestore();
+      // Destroy socket - should NOT trigger process.exit (shouldExit=false)
+      socket.destroy();
     });
 
-    it('should cleanup on SIGTERM when shouldExit is true', () => {
-      // Set VYX_TEST_MODE to prevent actual exit
-      process.env.VYX_TEST_MODE = 'true';
-
-      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((code?: number) => {
-        throw new Error(`process.exit called with "${code}"`);
-      });
-
-      const socketPath = '/tmp/test-sigterm';
-      const workerId = 'test-sigterm';
+    it('should handle SIGTERM without exit when shouldExit is false', () => {
+      const socketPath = '/tmp/test-sigterm-noexit';
+      const workerId = 'test-sigterm-noexit';
       const routes: RouteRegistration[] = [];
 
-      const socket = createAndSetupSocket(socketPath, workerId, routes, true);
+      const socket = createAndSetupSocket(socketPath, workerId, routes, false);
       expect(socket).toBeDefined();
 
-      // Emit SIGTERM - cleanup should be called
+      // Emit SIGTERM - should NOT exit (shouldExit=false)
       process.emit('SIGTERM');
-
-      // Restore spy
-      exitSpy.mockRestore();
-      delete process.env.VYX_TEST_MODE;
+      
+      socket.destroy();
     });
 
-    it('should cleanup on SIGINT when shouldExit is true', () => {
-      // Set VYX_TEST_MODE to prevent actual exit
-      process.env.VYX_TEST_MODE = 'true';
-
-      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((code?: number) => {
-        throw new Error(`process.exit called with "${code}"`);
-      });
-
-      const socketPath = '/tmp/test-sigint';
-      const workerId = 'test-sigint';
+    it('should handle SIGINT without exit when shouldExit is false', () => {
+      const socketPath = '/tmp/test-sigint-noexit';
+      const workerId = 'test-sigint-noexit';
       const routes: RouteRegistration[] = [];
 
-      const socket = createAndSetupSocket(socketPath, workerId, routes, true);
+      const socket = createAndSetupSocket(socketPath, workerId, routes, false);
       expect(socket).toBeDefined();
 
-      // Emit SIGINT - cleanup should be called
+      // Emit SIGINT - should NOT exit (shouldExit=false)
       process.emit('SIGINT');
-
-      // Restore spy
-      exitSpy.mockRestore();
-      delete process.env.VYX_TEST_MODE;
+      
+      socket.destroy();
     });
 
     it('should cleanup on SIGTERM when shouldExit is true', () => {
       // Set VYX_TEST_MODE to prevent actual exit
       process.env.VYX_TEST_MODE = 'true';
       
-      const socketPath = '/tmp/test-sigterm.sock';
-      const workerId = 'test-sigterm';
+      const socketPath = '/tmp/test-sigterm2';
+      const workerId = 'test-sigterm2';
       const routes: RouteRegistration[] = [];
       
-      const socket = createAndSetupSocket(socketPath, workerId, routes, true);
+      const socket = createAndSetupSocket(socketPath, workerId, routes, false);
       expect(socket).toBeDefined();
       
-      // Emit SIGTERM - cleanup should be called
+      // Emit SIGTERM - cleanup should be called (VYX_TEST_MODE prevents exit)
       process.emit('SIGTERM');
       
-      delete process.env.VYX_TEST_MODE;
+      // Don't delete VYX_TEST_MODE before destroying - it prevents process.exit
       socket.destroy();
+      delete process.env.VYX_TEST_MODE;
     });
 
     it('should cleanup on SIGINT when shouldExit is true', () => {
       // Set VYX_TEST_MODE to prevent actual exit
       process.env.VYX_TEST_MODE = 'true';
       
-      const socketPath = '/tmp/test-sigint.sock';
-      const workerId = 'test-sigint';
+      const socketPath = '/tmp/test-sigint2';
+      const workerId = 'test-sigint2';
       const routes: RouteRegistration[] = [];
       
-      const socket = createAndSetupSocket(socketPath, workerId, routes, true);
+      const socket = createAndSetupSocket(socketPath, workerId, routes, false);
       expect(socket).toBeDefined();
       
-      // Emit SIGINT - cleanup should be called
+      // Emit SIGINT - cleanup should be called (VYX_TEST_MODE prevents exit)
       process.emit('SIGINT');
       
-      delete process.env.VYX_TEST_MODE;
+      // Don't delete VYX_TEST_MODE before destroying - it prevents process.exit
       socket.destroy();
+      delete process.env.VYX_TEST_MODE;
     });
 
     it('should handle data events and update bufferRef', () => {

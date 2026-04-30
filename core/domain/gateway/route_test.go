@@ -136,7 +136,7 @@ func TestLoadRouteMap_InvalidJSON(t *testing.T) {
 	}
 	defer os.Remove(tmpfile)
 	
-	rm, err := dgw.LoadRouteMap(tmpfile)
+	rm, err := gateway.LoadRouteMap(tmpfile)
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}
@@ -156,7 +156,7 @@ func TestLoadRouteMap_MissingRoutesField(t *testing.T) {
 	}
 	defer os.Remove(tmpfile)
 	
-	rm, err := dgw.LoadRouteMap(tmpfile)
+	rm, err := gateway.LoadRouteMap(tmpfile)
 	if err != nil {
 		t.Fatalf("LoadRouteMap failed: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestLoadRouteMap_MissingRoutesField(t *testing.T) {
 		t.Fatal("expected RouteMap for missing routes field")
 	}
 	// Should have no routes
-	result, ok := rm.Lookup("GET", "/test")
+	_, ok := rm.Lookup("GET", "/test")
 	if ok {
 		t.Error("expected no route found")
 	}
@@ -172,31 +172,24 @@ func TestLoadRouteMap_MissingRoutesField(t *testing.T) {
 
 // Test Lookup with empty route map (lines 92-114)
 func TestLookup_EmptyRouteMap(t *testing.T) {
-	rm := dgw.NewRouteMap(nil)
+	rm := gateway.NewRouteMap(nil)
 	
-	result, ok := rm.Lookup("GET", "/test")
+	_, ok := rm.Lookup("GET", "/test")
 	if ok {
 		t.Error("expected no route found in empty map")
-	}
-	if result != nil {
-		t.Error("expected nil result")
 	}
 }
 
 // Test copyParams with missing param (lines 160-169)
 func TestCopyParams_MissingParam(t *testing.T) {
-	path := "/api/users/:id"
-	params := map[string]string{}
-	
-	// Call copyParams (need to export or test indirectly)
-	// For now, test Lookup which uses copyParams
-	entries := []dgw.RouteEntry{
+	// Create entries with param route
+	entries := []gateway.RouteEntry{
 		{Path: "/api/users/:id", Method: "GET", WorkerID: "w1"},
 	}
-	rm := dgw.NewRouteMap(entries)
+	rm := gateway.NewRouteMap(entries)
 	
 	// Lookup with missing param value
-	result, ok := rm.Lookup("GET", "/api/users/")
+	_, ok := rm.Lookup("GET", "/api/users/")
 	if ok {
 		t.Error("expected no route found for missing param")
 	}
@@ -205,10 +198,10 @@ func TestCopyParams_MissingParam(t *testing.T) {
 // Test traverse with nil node (lines 128-159)
 func TestTraverse_NilNode(t *testing.T) {
 	// Create a RouteMap and test traversal of non-existent path
-	rm := dgw.NewRouteMap(nil)
+	rm := gateway.NewRouteMap(nil)
 	
 	// Lookup non-existent path
-	result, ok := rm.Lookup("GET", "/non-existent")
+	_, ok := rm.Lookup("GET", "/non-existent")
 	if ok {
 		t.Error("expected no route found")
 	}
