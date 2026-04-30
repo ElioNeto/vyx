@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +15,10 @@ import (
 
 // TestDownloadZip_BinaryInSubdirectory tests downloadZip finds binaries in subdirs
 func TestDownloadZip_BinaryInSubdirectory(t *testing.T) {
+	if _, err := exec.LookPath("unzip"); err != nil {
+		t.Skip("unzip not found in PATH, skipping test")
+	}
+
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	fw, err := zw.Create(filepath.Join("subdir", "mybinary"))
@@ -53,6 +58,10 @@ func TestDownloadZip_BinaryInSubdirectory(t *testing.T) {
 
 // TestDownloadZip_BinaryNotFound tests error when binary missing after unzip
 func TestDownloadZip_BinaryNotFound(t *testing.T) {
+	if _, err := exec.LookPath("unzip"); err != nil {
+		t.Skip("unzip not found in PATH, skipping test")
+	}
+
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	fw, _ := zw.Create("otherfile")
