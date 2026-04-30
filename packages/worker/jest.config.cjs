@@ -5,10 +5,21 @@ module.exports = {
     '^.+\\.ts$': ['ts-jest', {
       useESM: true,
       diagnostics: false,
+      tsconfig: {
+        module: 'esnext',
+        moduleResolution: 'node',
+      },
     }],
   },
   moduleNameMapper: {
     '^(\\.?.*)\\.js$': '$1',
+  },
+  extensionsToTreatAsEsm: ['.ts'],
+  preset: 'ts-jest/presets/default-esm',
+  globals: {
+    'ts-jest': {
+      useESM: true,
+    },
   },
   coverageThreshold: {
     global: {
