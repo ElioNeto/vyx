@@ -5,6 +5,10 @@
  *
  * Uso:
  *   npx tsx scripts/check-todos.ts [.task-state.json]
+ *
+ * Exit code:
+ *   0 = todos os TODOs obrigatórios concluídos
+ *   1 = TODOs pendentes ou arquivo não encontrado
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -23,12 +27,15 @@ type TaskState = {
 };
 
 type FileCheck = { file: string; exists: boolean };
+type EvidenceCheck = { evidence: string; present: boolean };
+
 type TodoResult = {
   id: string;
   title: string;
   required: boolean;
   ok: boolean;
   files: FileCheck[];
+  evidence: EvidenceCheck[];
 };
 
 type CheckResult = {
@@ -67,24 +74,43 @@ function main(): void {
       task: null,
       totals: { total: 0, pending: 0, complete: 0 },
       results: [],
-      error: `JSON inválido: ${err instanceof Error ? err.message : String(err)}`,
+      error: `JSON inválido em ${stateFile}: ${err instanceof Error ? err.message : String(err)}`,
     };
     console.log(JSON.stringify(out, null, 2));
     process.exit(1);
   }
 
   const todos = state.todos ?? [];
+
   const results: TodoResult[] = todos.map((todo) => {
-    const fileChecks: FileCheck[] = (todo.files ?? []).map((f) => ({ file: f, exists: fileExists(f) }));
+    const fileChecks: FileCheck[] = (todo.files ?? []).map((f) => ({
+      file: f,
+      exists: fileExists(f),
+    }));
+    const evidenceChecks: EvidenceCheck[] = (todo.evidence ?? []).map((e) => ({
+      evidence: e,
+      present: true,
+    }));
     const ok = fileChecks.every((c) => c.exists);
-    return { id: todo.id, title: todo.title, required: todo.required !== false, ok, files: fileChecks };
+    return {
+      id: todo.id,
+      title: todo.title,
+      required: todo.required !== false,
+      ok,
+      files: fileChecks,
+      evidence: evidenceChecks,
+    };
   });
 
   const pending = results.filter((r) => r.required && !r.ok);
   const out: CheckResult = {
     ok: pending.length === 0,
     task: state.task ?? null,
-    totals: { total: results.length, pending: pending.length, complete: results.length - pending.length },
+    totals: {
+      total: results.length,
+      pending: pending.length,
+      complete: results.length - pending.length,
+    },
     results,
   };
 

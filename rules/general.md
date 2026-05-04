@@ -9,10 +9,14 @@
 - Título segue Conventional Commits
 - Descrição inclui: o que foi feito, por que, como testar
 - PR sem testes não é mergeada
-- Pipeline deve passar antes do merge
 
 ### Código
 - Sem código morto ou comentado
-- Sem debugging esquecido
+- Sem debugging esquecido (`console.log`, `fmt.Println`, `print()`)
 - Sem secrets no código
 - Tratamento de erros obrigatório
+
+### CI/CD
+- Pipeline deve passar antes do merge
+- Jobs locais devem ser validados com `workflow-agent` antes de abrir PR
+- Arquivo `.task-state.json` deve estar limpo após conclusão da tarefa

@@ -1,42 +1,60 @@
-# Binários e artefatos de build Go
+# Binários e artefatos de build
 dist/
 build/
-bin/
+out/
+.output/
 *.exe
+*.bin
+*.wasm
 
-# Go workspace e lockfiles
-go.work.sum
-go.sum
+# Dependências
+node_modules/
 vendor/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.tox/
 
 # Cobertura e relatórios
+coverage/
+*.coverprofile
 coverage.txt
 coverage.xml
-coverage.out
-*.coverprofile
+*.lcov
+.nyc_output/
 
-# Artefatos do vyx
-route_map.json
-annotate
+# Lockfiles (raramente úteis para o agente ler)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+go.sum
 
-# Dependências Node (scripts)
-scripts/node_modules/
-
-# Assets e mídia
+# Assets pesados
 *.png
 *.jpg
 *.jpeg
 *.gif
+*.svg
 *.ico
+*.mp4
+*.webm
 *.woff
 *.woff2
 *.ttf
-*.mp4
+
+# Gerado por ferramentas
+*.pb.go
+*.pb.gw.go
+*_gen.go
+*_generated.go
+zz_generated*.go
 
 # IDE e OS
 .idea/
 .vscode/
 *.DS_Store
+Thumbs.db
 
 # Secrets e envs locais
 .env
@@ -52,10 +70,7 @@ logs/
 
 # Cache de ferramentas
 .cache/
+.eslintcache
 .ruff_cache/
-
-# SonarCloud
-.sonar/
-
-# Task state (gerado por sessão)
-.task-state.json
+.mypy_cache/
+.pytest_cache/
