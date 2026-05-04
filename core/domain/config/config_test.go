@@ -213,3 +213,257 @@ func TestConfig_BuildDefaults(t *testing.T) {
 		t.Errorf("expected ./route_map.json, got %s", cfg.Build.RouteMapOutput)
 	}
 }
+
+func TestConfig_Validate_ValidReplicas(t *testing.T) {
+	cfg := config.Config{
+		Project: config.ProjectConfig{Name: "test"},
+		Workers: []config.WorkerConfig{
+			{ID: "worker1", Command: "echo", Replicas: 3},
+		},
+		Security: config.SecurityConfig{
+			JWTSecretEnv: "JWT_SECRET",
+		},
+	}
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestConfig_Validate_ZeroReplicas(t *testing.T) {
+	cfg := config.Config{
+		Project: config.ProjectConfig{Name: "test"},
+		Workers: []config.WorkerConfig{
+			{ID: "worker1", Command: "echo", Replicas: 0},
+		},
+		Security: config.SecurityConfig{
+			JWTSecretEnv: "JWT_SECRET",
+		},
+	}
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestConfig_Validate_ValidStrategy(t *testing.T) {
+	cfg := config.Config{
+		Project: config.ProjectConfig{Name: "test"},
+		Workers: []config.WorkerConfig{
+			{ID: "worker1", Command: "echo", Strategy: "round-robin"},
+		},
+		Security: config.SecurityConfig{
+			JWTSecretEnv: "JWT_SECRET",
+		},
+	}
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestConfig_Validate_LeastLoadedStrategy(t *testing.T) {
+	cfg := config.Config{
+		Project: config.ProjectConfig{Name: "test"},
+		Workers: []config.WorkerConfig{
+			{ID: "worker1", Command: "echo", Strategy: "least-loaded"},
+		},
+		Security: config.SecurityConfig{
+			JWTSecretEnv: "JWT_SECRET",
+		},
+	}
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestConfig_Validate_EmptyStrategy(t *testing.T) {
+	cfg := config.Config{
+		Project: config.ProjectConfig{Name: "test"},
+		Workers: []config.WorkerConfig{
+			{ID: "worker1", Command: "echo", Strategy: ""},
+		},
+		Security: config.SecurityConfig{
+			JWTSecretEnv: "JWT_SECRET",
+		},
+	}
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestConfig_Validate_ValidPoolSize(t *testing.T) {
+	cfg := config.Config{
+		Project: config.ProjectConfig{Name: "test"},
+		Workers: []config.WorkerConfig{
+			{ID: "worker1", Command: "echo", PoolSize: 10},
+		},
+		Security: config.SecurityConfig{
+			JWTSecretEnv: "JWT_SECRET",
+		},
+	}
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestConfig_Validate_ZeroPoolSize(t *testing.T) {
+	cfg := config.Config{
+		Project: config.ProjectConfig{Name: "test"},
+		Workers: []config.WorkerConfig{
+			{ID: "worker1", Command: "echo", PoolSize: 0},
+		},
+		Security: config.SecurityConfig{
+			JWTSecretEnv: "JWT_SECRET",
+		},
+	}
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestConfig_Validate_NegativePoolSize(t *testing.T) {
+	cfg := config.Config{
+		Project: config.ProjectConfig{Name: "test"},
+		Workers: []config.WorkerConfig{
+			{ID: "worker1", Command: "echo", PoolSize: -1},
+		},
+		Security: config.SecurityConfig{
+			JWTSecretEnv: "JWT_SECRET",
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected error for negative pool_size")
+	}
+}
+
+func TestConfig_Validate_MultipleWorkers(t *testing.T) {
+	cfg := config.Config{
+		Project: config.ProjectConfig{Name: "test"},
+		Workers: []config.WorkerConfig{
+			{ID: "worker1", Command: "echo", Replicas: 2, Strategy: "round-robin", PoolSize: 5},
+			{ID: "worker2", Command: "node", Replicas: 3, Strategy: "least-loaded", PoolSize: 10},
+		},
+		Security: config.SecurityConfig{
+			JWTSecretEnv: "JWT_SECRET",
+		},
+	}
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestConfig_Validate_ValidPoolSize(t *testing.T) {
+	cfg := config.Config{
+		Project: config.ProjectConfig{Name: "test"},
+		Workers: []config.WorkerConfig{
+			{ID: "worker1", Command: "echo", Replicas: 1, PoolSize: 10},
+		},
+	}
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestConfig_Validate_NegativePoolSize(t *testing.T) {
+	cfg := config.Config{
+		Project: config.ProjectConfig{Name: "test"},
+		Workers: []config.WorkerConfig{
+			{ID: "worker1", Command: "echo", Replicas: 1, PoolSize: -1},
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected error for negative pool_size")
+	}
+}
+
+func TestConfig_Validate_RoundRobinStrategy(t *testing.T) {
+	cfg := config.Config{
+		Project: config.ProjectConfig{Name: "test"},
+		Workers: []config.WorkerConfig{
+			{ID: "worker1", Command: "echo", Strategy: "round-robin"},
+		},
+	}
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestConfig_Validate_LeastLoadedStrategy(t *testing.T) {
+	cfg := config.Config{
+		Project: config.ProjectConfig{Name: "test"},
+		Workers: []config.WorkerConfig{
+			{ID: "worker1", Command: "echo", Strategy: "least-loaded"},
+		},
+	}
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestConfig_Validate_EmptyStrategy(t *testing.T) {
+	cfg := config.Config{
+		Project: config.ProjectConfig{Name: "test"},
+		Workers: []config.WorkerConfig{
+			{ID: "worker1", Command: "echo", Strategy: ""},
+		},
+	}
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestConfig_Validate_ZeroReplicas(t *testing.T) {
+	cfg := config.Config{
+		Project: config.ProjectConfig{Name: "test"},
+		Workers: []config.WorkerConfig{
+			{ID: "worker1", Command: "echo", Replicas: 0},
+		},
+	}
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestConfig_Validate_MultipleWorkers(t *testing.T) {
+	cfg := config.Config{
+		Project: config.ProjectConfig{Name: "test"},
+		Workers: []config.WorkerConfig{
+			{ID: "worker1", Command: "echo", Replicas: 2, Strategy: "round-robin", PoolSize: 5},
+			{ID: "worker2", Command: "echo", Replicas: 3, Strategy: "least-loaded", PoolSize: 10},
+			{ID: "worker3", Command: "echo", Replicas: 1, Strategy: ""},
+		},
+	}
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}

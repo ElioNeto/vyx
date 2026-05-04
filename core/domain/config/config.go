@@ -31,6 +31,7 @@ type WorkerConfig struct {
 	RuntimeVersion  string        `yaml:"runtime_version"` // optional: e.g. "20", "3.12"
 	Replicas        int           `yaml:"replicas"`
 	Strategy        string        `yaml:"strategy"`         // "round-robin" | "least-loaded"
+	PoolSize        int           `yaml:"pool_size"`        // optional: max pool size for this worker
 	StartupTimeout  time.Duration `yaml:"startup_timeout"`
 	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"` // max time to wait for in-flight requests
 }
@@ -143,6 +144,9 @@ func (c *Config) validateWorker(w WorkerConfig, idx int) error {
 	}
 	if w.Replicas < 0 {
 		errs = append(errs, fmt.Errorf("workers[%d].replicas must be >= 0 (id: %q)", idx, w.ID))
+	}
+	if w.PoolSize < 0 {
+		errs = append(errs, fmt.Errorf("workers[%d].pool_size must be >= 0 (id: %q)", idx, w.ID))
 	}
 	validStrategies := map[string]bool{"round-robin": true, "least-loaded": true, "": true}
 	if !validStrategies[w.Strategy] {
