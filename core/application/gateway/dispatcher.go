@@ -14,6 +14,7 @@ import (
 	dgw "github.com/ElioNeto/vyx/core/domain/gateway"
 	"github.com/ElioNeto/vyx/core/domain/circuit"
 	"github.com/ElioNeto/vyx/core/domain/ipc"
+	"github.com/ElioNeto/vyx/core/domain/pool"
 	"github.com/ElioNeto/vyx/core/application/lifecycle"
 )
 
@@ -44,6 +45,7 @@ type Dispatcher struct {
 	drainer   *lifecycle.WorkerDrainer
 	hooks     []RequestLifecycle
 	circuit   *circuit.Registry
+	poolMgr   *pool.Manager
 }
 
 // DispatcherConfig groups the dependencies for NewDispatcher.
@@ -56,6 +58,7 @@ type DispatcherConfig struct {
 	Timeout   time.Duration
 	Log       *zap.Logger
 	Drainer   *lifecycle.WorkerDrainer
+	PoolMgr   *pool.Manager
 }
 
 // NewDispatcher creates a Dispatcher wired with all required dependencies.
@@ -92,6 +95,7 @@ func NewDispatcher(cfg DispatcherConfig, opts ...interface{}) *Dispatcher {
 		drainer:   cfg.Drainer,
 		hooks:     []RequestLifecycle{NewAccessLogLifecycle(cfg.Log)},
 		circuit:   circuit.NewRegistry(circuitConfig, onStateChange),
+		poolMgr:   cfg.PoolMgr,
 	}
 	for _, opt := range dispatcherOpts {
 		opt(d)
@@ -370,6 +374,12 @@ func (d *Dispatcher) sendAndReceive(ctx context.Context, req *dgw.GatewayRequest
 	correlationID := req.Headers[HeaderCorrelationID]
 	cb := d.circuit.Get(fmt.Sprintf("%s:%s", req.Method, req.Path))
 
+	// Select worker using pool if available
+	workerID := d.selectWorker(route)
+	if workerID == "" {
+		workerID = route.WorkerID
+	}
+
 	payload, err := d.buildIPCPayload(req, correlationID)
 	if err != nil {
 		*statusCode = 500
@@ -379,19 +389,27 @@ func (d *Dispatcher) sendAndReceive(ctx context.Context, req *dgw.GatewayRequest
 	dispatchCtx, cancel := context.WithTimeout(ctx, d.timeout)
 	defer cancel()
 
-	if err := d.transport.Send(dispatchCtx, route.WorkerID, ipc.Message{
+	// Track in-flight for the selected worker
+	if d.drainer != nil {
+		d.drainer.Acquire(workerID)
+		lc.WorkerID = workerID
+	}
+
+	if err := d.transport.Send(dispatchCtx, workerID, ipc.Message{
 		Type:    ipc.TypeRequest,
 		Payload: payload,
 	}); err != nil {
-		return d.handleSendError(ctx, req, route, lc, statusCode, err, cb)
+		d.releaseInFlight(lc)
+		return d.handleSendError(ctx, req, &dgw.RouteEntry{WorkerID: workerID}, lc, statusCode, err, cb)
 	}
 
-	respMsg, err := d.transport.ReceiveResponse(dispatchCtx, route.WorkerID)
+	respMsg, err := d.transport.ReceiveResponse(dispatchCtx, workerID)
 	if err != nil {
+		d.releaseInFlight(lc)
 		return d.handleReceiveError(dispatchCtx, receiveErrorConfig{
 			Ctx:        ctx,
 			Req:        req,
-			Route:      route,
+			Route:      &dgw.RouteEntry{WorkerID: workerID},
 			Lc:         lc,
 			StatusCode: statusCode,
 			Err:        err,
@@ -400,10 +418,69 @@ func (d *Dispatcher) sendAndReceive(ctx context.Context, req *dgw.GatewayRequest
 	}
 
 	if respMsg.Type == ipc.TypeError {
-		return d.handleWorkerError(ctx, req, route, lc, statusCode, respMsg, cb)
+		d.releaseInFlight(lc)
+		return d.handleWorkerError(ctx, req, &dgw.RouteEntry{WorkerID: workerID}, lc, statusCode, respMsg, cb)
+	}
+
+	// Increment active requests for pool tracking
+	if d.poolMgr != nil {
+		p, ok := d.poolMgr.GetPool(extractPrefix(workerID))
+		if ok {
+			p.IncrementActiveReqs(workerID)
+		}
 	}
 
 	return d.decodeWorkerResponse(respMsg, correlationID)
+}
+
+// selectWorker selects a worker from the pool based on the route configuration.
+func (d *Dispatcher) selectWorker(route *dgw.RouteEntry) string {
+	if d.poolMgr == nil {
+		return route.WorkerID
+	}
+
+	prefix := extractPrefix(route.WorkerID)
+	pool, ok := d.poolMgr.GetPool(prefix)
+	if !ok {
+		return route.WorkerID
+	}
+
+	worker := pool.SelectWorker()
+	if worker == nil {
+		return route.WorkerID
+	}
+
+	// Track active request
+	pool.IncrementActiveReqs(worker.ID)
+
+	// Schedule decrement when request completes (best effort)
+	go func(workerID string) {
+		<-time.After(30 * time.Second) // timeout as fallback
+		pool.DecrementActiveReqs(workerID)
+	}(worker.ID)
+
+	return worker.ID
+}
+
+// extractPrefix extracts the worker pool prefix from a worker ID.
+func extractPrefix(workerID string) string {
+	// Find the last dash followed by a number
+	for i := len(workerID) - 1; i >= 0; i-- {
+		if workerID[i] == '-' {
+			// Check if the rest is a number
+			isNum := true
+			for j := i + 1; j < len(workerID); j++ {
+				if workerID[j] < '0' || workerID[j] > '9' {
+					isNum = false
+					break
+				}
+			}
+			if isNum && i > 0 {
+				return workerID[:i]
+			}
+		}
+	}
+	return workerID
 }
 
 // buildIPCPayload builds the IPC request payload.

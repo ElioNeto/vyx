@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ElioNeto/vyx/core/domain/ipc"
+	"github.com/ElioNeto/vyx/core/domain/pool"
 	"github.com/ElioNeto/vyx/core/domain/worker"
 	"github.com/ElioNeto/vyx/core/infrastructure/runtime"
 )
@@ -26,6 +27,7 @@ type Service struct {
 	transport ipc.Transport
 	receiver  ReceiverStarter
 	drainer   *WorkerDrainer
+	poolMgr   *pool.Manager
 }
 
 // NewService constructs a lifecycle Service.
@@ -36,6 +38,7 @@ func NewService(
 	transport ipc.Transport,
 	receiver ReceiverStarter,
 	drainer *WorkerDrainer,
+	poolMgr *pool.Manager,
 ) *Service {
 	return &Service{
 		repo:      repo,
@@ -44,6 +47,7 @@ func NewService(
 		transport: transport,
 		receiver:  receiver,
 		drainer:   drainer,
+		poolMgr:   poolMgr,
 	}
 }
 
@@ -60,6 +64,11 @@ type SpawnWorkerConfig struct {
 
 // SpawnWorker registers a new worker and starts its process.
 func (s *Service) SpawnWorker(ctx context.Context, cfg SpawnWorkerConfig) (*worker.Worker, error) {
+	return s.SpawnWorkerWithReplicas(ctx, cfg, 1, "round-robin")
+}
+
+// SpawnWorkerWithReplicas registers a worker with the specified number of replicas and strategy.
+func (s *Service) SpawnWorkerWithReplicas(ctx context.Context, cfg SpawnWorkerConfig, replicas int, strategy string) (*worker.Worker, error) {
 	if cfg.Command == "" {
 		return nil, worker.ErrInvalidCommand
 	}
@@ -99,6 +108,25 @@ func (s *Service) SpawnWorker(ctx context.Context, cfg SpawnWorkerConfig) (*work
 		return nil, err
 	}
 
+	// If pool manager is available and we need multiple replicas, use pool
+	if s.poolMgr != nil && replicas > 1 {
+		poolCfg := pool.ManagerConfig{
+			Replicas: replicas,
+			Strategy: pool.Strategy(strategy),
+		}
+		s.poolMgr.RegisterPool(cfg.ID, poolCfg)
+		if err := s.poolMgr.SpawnWorkers(ctx, cfg.ID, w); err != nil {
+			w.State = worker.StateStopped
+			w.UpdatedAt = time.Now()
+			_ = s.repo.Save(ctx, w)
+			s.publish(ctx, worker.EventSpawned, w, err.Error())
+			return nil, worker.ErrSpawnFailed
+		}
+		s.publish(ctx, worker.EventSpawned, w, fmt.Sprintf("pool created with %d replicas", replicas))
+		return w, nil
+	}
+
+	// Single worker, spawn directly
 	if err := s.manager.Spawn(ctx, w); err != nil {
 		w.State = worker.StateStopped
 		w.UpdatedAt = time.Now()
@@ -258,7 +286,7 @@ func (s *Service) RestartWorker(ctx context.Context, id string) error {
 
 	_ = s.manager.Stop(ctx, id)
 
-// Drain before stop (reuse same logic as StopWorker).
+	// Drain before stop (reuse same logic as StopWorker).
 	if s.drainer != nil {
 		shutdownTimeout := 30 * time.Second
 		if w.ShutdownTimeout > 0 {
@@ -267,27 +295,29 @@ func (s *Service) RestartWorker(ctx context.Context, id string) error {
 		s.drainer.MarkDraining(id)
 		_ = s.drainer.Drain(ctx, id, shutdownTimeout)
 	}
-// Stop the old process.
-if err := s.manager.Stop(ctx, id); err != nil {
-	return err
-}
-// Recreate the IPC endpoint so the restarted worker can connect.
-// The small sleep between Deregister and Register gives the OS time to
-// fully recycle the previous pipe handle before we call CreateNamedPipe
-// again with the same name. Without this gap the new ConnectNamedPipe
-// goroutine can race with the dying worker process and inherit its
-// broken handle — producing the "pipe has been ended" loop.
-if s.transport != nil {
-	_ = s.transport.Deregister(ctx, id)
-	time.Sleep(5 * time.Millisecond)
-	if err := s.transport.Register(ctx, id); err != nil {
-		w.State = worker.StateStopped
-		w.UpdatedAt = time.Now()
-		_ = s.repo.Save(ctx, w)
-		s.publish(ctx, worker.EventStopped, w, "restart failed: transport re-register: "+err.Error())
-		return worker.ErrSpawnFailed
+
+	// Stop the old process.
+	if err := s.manager.Stop(ctx, id); err != nil {
+		return err
 	}
-}
+
+	// Recreate the IPC endpoint so the restarted worker can connect.
+	// The small sleep between Deregister and Register gives the OS time to
+	// fully recycle the previous pipe handle before we call CreateNamedPipe
+	// again with the same name. Without this gap the new ConnectNamedPipe
+	// goroutine can race with the dying worker process and inherit its
+	// broken handle — producing the "pipe has been ended" loop.
+	if s.transport != nil {
+		_ = s.transport.Deregister(ctx, id)
+		time.Sleep(5 * time.Millisecond)
+		if err := s.transport.Register(ctx, id); err != nil {
+			w.State = worker.StateStopped
+			w.UpdatedAt = time.Now()
+			_ = s.repo.Save(ctx, w)
+			s.publish(ctx, worker.EventStopped, w, "restart failed: transport re-register: "+err.Error())
+			return worker.ErrSpawnFailed
+		}
+	}
 
 	if err := s.manager.Spawn(ctx, w); err != nil {
 		w.State = worker.StateStopped

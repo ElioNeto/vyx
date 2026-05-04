@@ -38,6 +38,26 @@ func (w *Worker) IsAlive() bool {
 	return w.State == StateRunning
 }
 
+// SetHealth updates the worker's health status based on heartbeat or health check.
+func (w *Worker) SetHealth(healthy bool) {
+	if healthy {
+		w.State = StateRunning
+	} else {
+		w.State = StateUnhealthy
+	}
+	w.LastHeartbeat = time.Now()
+	w.UpdatedAt = time.Now()
+}
+
+// RecordHeartbeat updates the last heartbeat time and marks the worker as running if it was unhealthy.
+func (w *Worker) RecordHeartbeat() {
+	w.LastHeartbeat = time.Now()
+	w.UpdatedAt = time.Now()
+	if w.State == StateUnhealthy {
+		w.State = StateRunning
+	}
+}
+
 // Repository defines persistence operations for workers.
 // Implemented by the infrastructure layer.
 type Repository interface {
