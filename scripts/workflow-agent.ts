@@ -18,6 +18,9 @@ import os from 'node:os';
 import { spawn } from 'node:child_process';
 import YAML from 'yaml';
 
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 type Step = {
   name?: string;
   run?: string;
@@ -38,17 +41,22 @@ type Job = {
 
 type Workflow = { jobs?: Record<string, Job> };
 
-// Jobs que requerem secrets/serviços externos — pulados localmente
+// ---------------------------------------------------------------------------
+// Jobs que requerem secrets/serviços externos — pular localmente
+// Adicione aqui jobs específicos do seu projeto se necessário.
+// ---------------------------------------------------------------------------
 const SKIP_JOBS = new Set([
-  'sonarcloud',
   'secrets-scan',
   'semgrep',
+  'sonarcloud',
   'codeql',
   'snyk',
   'dependabot',
-  'gitleaks',
 ]);
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 function emit(event: Record<string, unknown>): void {
   process.stdout.write(JSON.stringify({ ts: new Date().toISOString(), ...event }) + os.EOL);
 }
@@ -58,9 +66,9 @@ function mergeEnv(...parts: Array<Record<string, string> | undefined>): Record<s
 }
 
 function resolveContainer(job: Job): string {
-  if (!job.container) return 'golang:1.22';
+  if (!job.container) return 'ubuntu:22.04';
   if (typeof job.container === 'string') return job.container;
-  return job.container.image ?? 'golang:1.22';
+  return job.container.image ?? 'ubuntu:22.04';
 }
 
 function readWorkflow(file: string): Workflow {
@@ -68,6 +76,9 @@ function readWorkflow(file: string): Workflow {
   return YAML.parse(raw) as Workflow;
 }
 
+// ---------------------------------------------------------------------------
+// Runner via Docker
+// ---------------------------------------------------------------------------
 async function runStepInDocker(opts: {
   image: string;
   projectRoot: string;
@@ -81,12 +92,12 @@ async function runStepInDocker(opts: {
 
   const args = [
     'run', '--rm',
-    '--network', 'host',
+    '--network', 'none',
     '-v', `${opts.projectRoot}:/workspace`,
     '-w', '/workspace',
     ...Object.entries(opts.env).flatMap(([k, v]) => ['-e', `${k}=${v}`]),
     opts.image,
-    opts.shell, '-c', wrappedCommand,
+    opts.shell, '-lc', wrappedCommand,
   ];
 
   return new Promise<number>((resolve, reject) => {
@@ -106,6 +117,9 @@ async function runStepInDocker(opts: {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Job runner
+// ---------------------------------------------------------------------------
 async function runJob(
   jobId: string,
   job: Job,
@@ -170,6 +184,9 @@ async function runJob(
   return 0;
 }
 
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');

@@ -1,92 +1,131 @@
-# AGENTS.md — vyx (OmniStack Engine)
+# AGENTS.md
+
+<!-- Este arquivo é gerado automaticamente pelo boilerplate-opencode. -->
+<!-- Não edite manualmente a seção entre as tags AUTO-GENERATED. -->
+<!-- Preencha as seções marcadas com > após a instalação. -->
 
 ## Projeto
 
-**vyx** implementa o **OmniStack Engine**: um framework full-stack poliglota onde um **Core Orchestrator** em Go atua como ponto central de controle. O core gerencia workers (Node.js, Python, Go), faz roteamento baseado em anotações descobertas em tempo de build, e comunica com os workers via **Unix Domain Sockets (UDS) + Apache Arrow**.
-
-O core é o **único processo exposto à rede**. Todos os workers são processos filhos gerenciados pelo core.
+> Nome do projeto, objetivo principal e contexto de negócio em 2-3 frases.
 
 ## Stack
 
-- **Linguagem principal**: Go (core orchestrator)
-- **Workers suportados**: Node.js (TypeScript), Python, Go
-- **Frontend**: React com anotações `@Page`
-- **IPC**: Unix Domain Sockets + Apache Arrow (datasets grandes) / MsgPack (payloads pequenos)
-- **Autenticação**: JWT validado no core; workers recebem apenas claims
-- **CLI**: `omni` (new, dev, build, annotate)
-- **Testes**: `go test ./... -race`
-- **Lint**: `golangci-lint run`
-- **Segurança**: `govulncheck ./...`
+> Liste as tecnologias principais: linguagem, framework, banco de dados, infra.
+> Exemplo: Node.js 20 + TypeScript, Fastify, PostgreSQL, Docker.
 
-## Estrutura do repositório
+<!-- AUTO-GENERATED:START -->
+## Regras gerais
 
+### Commits
+- Seguir Conventional Commits: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`
+- Mensagens em inglês, imperativo presente: "add feature" não "added feature"
+- Commits atômicos: uma responsabilidade por commit
+
+### Pull Requests
+- Título segue Conventional Commits
+- Descrição inclui: o que foi feito, por que, como testar
+- PR sem testes não é mergeada
+
+### Código
+- Sem código morto ou comentado
+- Sem debugging esquecido (`console.log`, `fmt.Println`, `print()`)
+- Sem secrets no código
+- Tratamento de erros obrigatório
+
+### CI/CD
+- Pipeline deve passar antes do merge
+- Jobs locais devem ser validados com `workflow-agent` antes de abrir PR
+- Arquivo `.task-state.json` deve estar limpo após conclusão da tarefa
+
+## Regras de CI/CD
+
+### workflow-agent
+O script `scripts/workflow-agent.ts` executa localmente os jobs do `ci.yml` que não dependem de secrets externos.
+
+Saída JSON linha a linha:
+- `job_started` — início de um job
+- `step_started` / `step_finished` — início/fim de cada step com `exitCode`
+- `job_finished` — status do job (`success` | `failed` | `skipped`)
+- `workflow_finished` — resultado final
+
+Jobs pulados automaticamente quando requerem secrets externos:
+- `secrets-scan`, `semgrep`, `sonarcloud` e similares
+
+### check-todos
+O script `scripts/check-todos.ts` verifica se os arquivos listados nos TODOs do `.task-state.json` existem.
+
+Saída JSON: `{ ok: boolean, totals: {...}, results: [...] }`
+
+### Pré-requisitos locais
+- Docker disponível no PATH
+- Node.js ≥ 20
+- `cd scripts && npm install`
+
+## Regras Go
+
+### Convenções
+- Seguir o [Go Code Review Comments](https://github.com/golang/go/wiki/CodeReviewComments)
+- Nomes de pacotes: lower case, sem underscores
+- Interfaces: sufixo `-er` quando possível (`Reader`, `Writer`, `Handler`)
+- Erros: sempre tratados, nunca `_`
+- `context.Context` sempre como primeiro parâmetro
+
+### Estrutura de pacotes
+- `internal/` para código não exportado
+- `cmd/` para entry points
+- `pkg/` para bibliotecas exportadas (quando aplicável)
+
+### Testes
+- Arquivos de teste: `*_test.go` no mesmo pacote
+- Table-driven tests para múltiplos casos
+- `testify` permitido; prefer `t.Fatal` sobre `t.Error` quando o estado é inválido
+
+### Build e ferramentas
+```bash
+go build ./...
+go test ./... -race -coverprofile=coverage.txt
+go vet ./...
+golangci-lint run
+govulncheck ./...
 ```
-cmd/          ← entry points do CLI (omni)
-core/         ← Core Orchestrator: dispatcher, circuit breaker, runtime manager
-scanner/      ← annotation parser (build time) → gera route_map.json
-packages/     ← bibliotecas compartilhadas
-examples/     ← projetos de exemplo
-docs/         ← documentação
-scripts/      ← ferramentas de CI local (workflow-agent, check-todos)
-```
+
+### CI jobs locais
+- `go-test`: `go build ./...` + `go test ./...`
+- `security-go`: `govulncheck ./...`
+<!-- AUTO-GENERATED:END -->
 
 ## Comandos úteis
 
-```bash
-# Build
-go build ./...
+> Preencha com os comandos exatos do projeto. O agente usará estes comandos diretamente.
 
-# Testes com race detector
-go test ./... -race -coverprofile=coverage.txt
+```bash
+# Instalar dependências
+npm install
+
+# Rodar testes
+npm test
 
 # Lint
-golangci-lint run
+npm run lint
 
-# Análise de vulnerabilidades
-govulncheck ./...
+# Build
+npm run build
 
-# Executar CI localmente (antes de abrir PR)
-npx tsx scripts/workflow-agent.ts .github/workflows/ci.yml
-
-# Verificar TODOs da task
-npx tsx scripts/check-todos.ts .task-state.json
-
-# Instalar dependências dos scripts
-bash scripts/install-deps.sh
+# Dev
+npm run dev
 ```
 
 ## Convenções
 
-### Go
-- Seguir [Go Code Review Comments](https://github.com/golang/go/wiki/CodeReviewComments)
-- `context.Context` sempre como primeiro parâmetro em funções que fazem I/O
-- Erros sempre tratados — nunca `_` para erros
-- Interfaces com sufixo `-er` quando possível (`Worker`, `Dispatcher`, `Handler`)
-- Pacotes em lowercase sem underscores
-- Sem `fmt.Println` de debug no código de produção
+> Preencha com as convenções do projeto.
 
-### Anotações (sistema de rotas)
-- Anotações em comentários Go: `// @Route(METHOD /path)`, `// @Auth(roles: [...])`, `// @Validate(JsonSchema: "name")`
-- Scanner (`scanner/`) processa anotações em build time e gera `route_map.json`
-- Nunca modificar `route_map.json` manualmente
+- **Commits**: Conventional Commits (`feat`, `fix`, `chore`, `docs`, `refactor`)
+- **Branches**: `feat/<slug>`, `fix/<slug>`, `chore/<slug>`
+- **Naming**: camelCase para variáveis/funções, PascalCase para classes/tipos
+- **Testes**: arquivos `*.test.ts` ao lado do módulo testado
+- **Estrutura de pastas**: descreva aqui
 
-### Protocolo IPC
-- Protocolo binário: `[Length][Type 1 byte][Payload]`
-- Types: `0x01` request, `0x02` response, `0x03` heartbeat, `0x04` error
-- Payload: JSON para desenvolvimento, MsgPack para produção, Arrow para datasets grandes
+## Contexto de domínio
 
-### Commits
-- Conventional Commits: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`
-- Mensagens em inglês, imperativo presente
-- PR sem testes não é mergeada
-
-## Ciclo de entrega (obrigatório)
-
-1. Criar `.task-state.json` com TODOs da tarefa
-2. Implementar
-3. `npx tsx scripts/check-todos.ts .task-state.json` → deve retornar `ok: true`
-4. `npx tsx scripts/workflow-agent.ts .github/workflows/ci.yml` → todos os jobs devem passar
-5. Só encerrar com ambos passando
-
-<!-- AUTO-GENERATED:START -->
-<!-- AUTO-GENERATED:END -->
+> Glossário de termos do negócio que o agente precisa entender para implementar corretamente.
+> Exemplo: "Pedido" = entidade central; "Fulfillment" = processo de separação e envio.

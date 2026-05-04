@@ -1,18 +1,21 @@
-## Regras Go — vyx
+## Regras Go
 
 ### Convenções
-- Seguir [Go Code Review Comments](https://github.com/golang/go/wiki/CodeReviewComments)
-- Nomes de pacotes: lowercase sem underscores
-- Interfaces: sufixo `-er` quando possível
-- Erros sempre tratados — nunca `_` para erros
+- Seguir o [Go Code Review Comments](https://github.com/golang/go/wiki/CodeReviewComments)
+- Nomes de pacotes: lower case, sem underscores
+- Interfaces: sufixo `-er` quando possível (`Reader`, `Writer`, `Handler`)
+- Erros: sempre tratados, nunca `_`
 - `context.Context` sempre como primeiro parâmetro
-- Sem `fmt.Println` no código de produção
 
-### Estrutura de pacotes do vyx
-- `cmd/` — entry points do CLI `omni`
-- `core/` — Core Orchestrator (dispatcher, runtime manager, circuit breaker, gateway)
-- `scanner/` — annotation parser, gerador de route_map.json
-- `packages/` — bibliotecas compartilhadas
+### Estrutura de pacotes
+- `internal/` para código não exportado
+- `cmd/` para entry points
+- `pkg/` para bibliotecas exportadas (quando aplicável)
+
+### Testes
+- Arquivos de teste: `*_test.go` no mesmo pacote
+- Table-driven tests para múltiplos casos
+- `testify` permitido; prefer `t.Fatal` sobre `t.Error` quando o estado é inválido
 
 ### Build e ferramentas
 ```bash
@@ -23,8 +26,6 @@ golangci-lint run
 govulncheck ./...
 ```
 
-### Testes
-- Table-driven tests obrigatórios para múltiplos casos
-- `-race` sempre habilitado
-- Mocks via interfaces, nunca structs concretos
-- Fixtures em `testdata/`
+### CI jobs locais
+- `go-test`: `go build ./...` + `go test ./...`
+- `security-go`: `govulncheck ./...`
