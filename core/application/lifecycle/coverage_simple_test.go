@@ -45,7 +45,7 @@ func newTestServiceWithRepo(repo worker.Repository, manager worker.Manager) (*li
 	os.Setenv("VYX_SKIP_RUNTIME", "1")
 	pub := &mockPublisher{}
 	drainer := lifecycle.NewWorkerDrainer()
-	return lifecycle.NewService(repo, manager, pub, nil, nil, drainer), pub
+	return lifecycle.NewService(repo, manager, pub, nil, nil, drainer, nil), pub
 }
 
 // TestSpawnWorker_RepoSaveError testa erro em repo.Save

@@ -85,7 +85,7 @@ func Defaults() Config {
 			CircuitBreaker: CircuitBreakerConfig{
 				Failures:    5,
 				Cooldown:   30 * time.Second,
-				HalfOpenMax: 1,
+				HalfOpenMax: 3,
 			},
 			PayloadMaxSize: "1mb",
 			GlobalTimeout:  30 * time.Second,

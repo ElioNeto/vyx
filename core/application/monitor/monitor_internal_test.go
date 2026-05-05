@@ -85,7 +85,7 @@ func newTestService2() (*lifecycle.Service, *memRepo2) {
 	repo := newMemRepo2()
 	mgr := &mockManager2{}
 	pub := &mockPublisher2{}
-	svc := lifecycle.NewService(repo, mgr, pub, nil, nil, nil)
+	svc := lifecycle.NewService(repo, mgr, pub, nil, nil, nil, nil)
 	return svc, repo
 }
 

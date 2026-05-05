@@ -1,0 +1,212 @@
+{
+  "last_sync": "2026-05-04T16:40:00Z",
+  "issues": [
+    {
+      "number": 67,
+      "priority": "low",
+      "title": "debt: logger do @vyx/worker não lê automaticamente do AsyncLocalStorage (#64 pendência)",
+      "status": "open",
+      "depends_on": [
+        53
+      ],
+      "blocks": [],
+      "acceptance_summary": [],
+      "fetched_body": false
+    },
+    {
+      "number": 59,
+      "priority": "low",
+      "title": "[Feature] Worker-Initiated Remote Connection (Pull Model / Multi-Host Support)",
+      "status": "open",
+      "depends_on": [],
+      "blocks": [],
+      "acceptance_summary": [],
+      "fetched_body": false
+    },
+    {
+      "number": 58,
+      "priority": "high",
+      "title": "[Feature] UDS Connection Warm Pool (Pre-established Connection Sliding Window)",
+      "status": "open",
+      "depends_on": [],
+      "blocks": [],
+      "acceptance_summary": [],
+      "fetched_body": false
+    },
+    {
+      "number": 57,
+      "priority": "high",
+      "title": "[Feature] Pluggable Client IP Resolver (X-Forwarded-For / X-Real-IP support)",
+      "status": "open",
+      "depends_on": [],
+      "blocks": [],
+      "acceptance_summary": [],
+      "fetched_body": false
+    },
+    {
+      "number": 54,
+      "priority": "medium",
+      "title": "[Feature] CLI / TUI for Real-Time Distributed Log Tailing and Search",
+      "status": "open",
+      "depends_on": [],
+      "blocks": [],
+      "acceptance_summary": [],
+      "fetched_body": false
+    },
+    {
+      "number": 53,
+      "priority": "high",
+      "title": "[Feature] Standardized Structured Logging across Polyglot Workers",
+      "status": "open",
+      "depends_on": [],
+      "blocks": [],
+      "acceptance_summary": [],
+      "fetched_body": false
+    },
+    {
+      "number": 27,
+      "priority": "low",
+      "title": "[Feature]: Support for Elixir Workers (BEAM VM)",
+      "status": "open",
+      "depends_on": [],
+      "blocks": [],
+      "acceptance_summary": [],
+      "fetched_body": false
+    },
+    {
+      "number": 21,
+      "priority": "high",
+      "title": "[Feature] CI/CD pipeline: annotation scanning and testing in build",
+      "status": "open",
+      "depends_on": [],
+      "blocks": [],
+      "acceptance_summary": [
+        "GitHub Actions workflow runs on every PR to `main`",
+        "Pipeline steps:",
+        "On push to `main`: build artifacts are published as a GitHub Release",
+        "Test coverage report posted as a PR comment",
+        "Workers can be tested by mocking the core or using a test core instance"
+      ],
+      "fetched_body": false
+    },
+    {
+      "number": 15,
+      "priority": "low",
+      "title": "[Feature] Kubernetes operator integration",
+      "status": "open",
+      "depends_on": [],
+      "blocks": [],
+      "acceptance_summary": [
+        "Custom Resource Definition (CRD): `VyxApp` to describe a vyx project deployment",
+        "Operator manages core and worker Deployments, Services, and ConfigMaps",
+        "Supports rolling updates with zero downtime",
+        "Integrates with HorizontalPodAutoscaler for worker pool scaling",
+        "Liveness and readiness probes configured automatically from heartbeat endpoint"
+      ],
+      "fetched_body": false
+    },
+    {
+      "number": 13,
+      "priority": "medium",
+      "title": "[Feature] Documentation: guides, API reference and annotated examples",
+      "status": "open",
+      "depends_on": [],
+      "blocks": [],
+      "acceptance_summary": [
+        "**Getting Started** guide: install, scaffold, run first project",
+        "**Annotation Reference**: full spec for `@Route`, `@Validate`, `@Auth`, `@Page`",
+        "**CLI Reference**: all commands with flags and examples",
+        "**`vyx.yaml` Reference**: all configuration keys documented",
+        "**Architecture Overview**: how core, workers, and IPC interact"
+      ],
+      "fetched_body": false
+    },
+    {
+      "number": 12,
+      "priority": "medium",
+      "title": "[Feature] TLS termination and security hardening",
+      "status": "open",
+      "depends_on": [],
+      "blocks": [],
+      "acceptance_summary": [
+        "Core manages TLS certificates and terminates HTTPS (HTTP/1.1 and HTTP/2)",
+        "Support for automatic certificate renewal (Let's Encrypt / ACME)",
+        "Header sanitization applied to all incoming requests",
+        "Workers run under restricted filesystem access (configurable)",
+        "Rate limiting enforced per IP and per token (configurable limits in `vyx.yaml`)"
+      ],
+      "fetched_body": false
+    },
+    {
+      "number": 11,
+      "priority": "medium",
+      "title": "[Feature] Observability: structured logging, Prometheus metrics and OpenTelemetry tracing",
+      "status": "open",
+      "depends_on": [],
+      "blocks": [],
+      "acceptance_summary": [
+        "Core and workers emit **structured JSON logs** with: `level`, `timestamp`, `service`, `correlation_id`",
+        "`/metrics` endpoint exposes Prometheus metrics:",
+        "**OpenTelemetry** trace headers propagated from core to workers via message metadata",
+        "Sample **Grafana dashboard** JSON provided in `infra/grafana/`",
+        "Correlation ID generated per request and included in all downstream logs"
+      ],
+      "fetched_body": false
+    },
+    {
+      "number": 10,
+      "priority": "medium",
+      "title": "[Feature] Hot reload: file watching and zero-downtime worker restart in dev mode",
+      "status": "open",
+      "depends_on": [],
+      "blocks": [],
+      "acceptance_summary": [
+        "In `vyx dev`, core watches backend and frontend directories for file changes",
+        "On change, the affected worker is gracefully restarted (drain in-flight requests first)",
+        "Frontend (React/Node SSR) reloads without full core restart",
+        "In production, `SIGUSR1` triggers a zero-downtime reload: new worker starts before old one stops",
+        "Reload events are logged with timestamps and affected worker IDs"
+      ],
+      "fetched_body": false
+    },
+    {
+      "number": 9,
+      "priority": "high",
+      "title": "[Feature] Worker pools and round-robin load balancing",
+      "status": "open",
+      "depends_on": [],
+      "blocks": [],
+      "acceptance_summary": [
+        "`vyx.yaml` allows defining multiple instances per worker (e.g., `replicas: 4`)",
+        "Core spawns and manages all instances in the pool",
+        "Requests are balanced using **round-robin** by default",
+        "**Least-loaded** strategy available as an option",
+        "Unhealthy instances are removed from the pool and replaced"
+      ],
+      "fetched_body": false
+    },
+    {
+      "number": 7,
+      "priority": "medium",
+      "title": "[Feature] Apache Arrow IPC for large dataset transfers",
+      "status": "open",
+      "depends_on": [],
+      "blocks": [],
+      "acceptance_summary": [
+        "Core and workers can exchange Arrow `RecordBatch` payloads via UDS",
+        "Zero-copy via `mmap` / shared memory when payload exceeds threshold",
+        "Fallback to streaming chunks when volume exceeds memory limits",
+        "Small payloads continue to use MsgPack (no regression)",
+        "Clear threshold configuration in `vyx.yaml`"
+      ],
+      "fetched_body": false
+    }
+  ],
+  "total": 15,
+  "by_priority": {
+    "critical": 0,
+    "high": 5,
+    "medium": 6,
+    "low": 4
+  }
+}

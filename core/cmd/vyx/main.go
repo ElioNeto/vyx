@@ -711,7 +711,7 @@ func setupLifecycleServices(
 ) (*heartbeat.Receiver, *lifecycle.Service, *monitor.Monitor) {
 	hbCfg := heartbeat.DefaultConfig()
 	hbReceiver := heartbeat.NewReceiver(transport, repo, nil, hbCfg, log)
-	service := lifecycle.NewService(repo, manager, publisher, transport, hbReceiver, drainer)
+	service := lifecycle.NewService(repo, manager, publisher, transport, hbReceiver, drainer, nil)
 	hbReceiver.SetService(service)
 	healthMonitor := monitor.New(service, repo)
 	return hbReceiver, service, healthMonitor

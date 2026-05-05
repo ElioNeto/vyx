@@ -129,10 +129,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install & Test
+      - name: Install & Lint
         working-directory: packages/worker
         run: |
           npm install
+          npm run lint
+
+      - name: Test
+        working-directory: packages/worker
+        run: |
           npm test
           npm audit --audit-level=high
 
@@ -167,7 +172,7 @@ jobs:
           python -m pip install pip-audit
           pip-audit --version  # test if installed
           # Simplified: just run pip-audit on the package
-          cd packages/python && pip-audit . || true
+          cd packages/python && pip-audit . || echo "Vulnerabilities found but not failing"
 
   secrets-scan:
     name: Security — Secrets (Gitleaks)
@@ -247,13 +252,11 @@ jobs:
           MAX_RETRIES=30
           i=0
           echo "Waiting for SonarCloud analysis to finish..."
-          # base64-encoded python: reads sonar CE task status from stdin JSON
-          PARSE_STATUS='aW1wb3J0IHN5cyxqc29uCmQ9anNvbi5sb2FkKHN5cy5zdGRpbikKdGFza3M9ZC5nZXQoJ3F1ZXVlJyxbXSkrKFtkWydjdXJyZW50J11dIGlmIGQuZ2V0KCdjdXJyZW50JykgZWxzZSBbXSkKbGF0ZXN0PXNvcnRlZCh0YXNrcyxrZXk9bGFtYmRhIHQ6dC5nZXQoJ3N1Ym1pdHRlZEF0JywnJykscmV2ZXJzZT1UcnVlKQpwcmludChsYXRlc3RbMF1bJ3N0YXR1cyddIGlmIGxhdGVzdCBlbHNlICdOT05FJykK'
           while true; do
             RESPONSE=$(curl -sf \
               -H "Authorization: Bearer ${SONAR_TOKEN}" \
               "https://sonarcloud.io/api/ce/component?component=${PROJECT_KEY}" || echo '{}')
-            STATUS=$(echo "${RESPONSE}" | python3 <(echo "${PARSE_STATUS}" | base64 -d) 2>/dev/null || echo "UNKNOWN")
+            STATUS=$(echo "${RESPONSE}" | python3 .github/scripts/wait_sonar_analysis.py 2>/dev/null || echo "UNKNOWN")
             echo "  status: ${STATUS}"
             
             # If FAILED, exit with error to fail the pipeline
@@ -281,9 +284,7 @@ jobs:
       - name: Extract SonarCloud report
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: |
-          echo 'aW1wb3J0IG9zLCBqc29uLCB1cmxsaWIucmVxdWVzdCwgdXJsbGliLnBhcnNlCgpUT0tFTiA9IG9zLmVudmlyb25bIlNPTkFSX1RPS0VOIl0KUFJPSkVDVF9LRVkgPSAiRWxpb05ldG9fdnl4IgpCQVNFX1VSTCA9ICJodHRwczovL3NvbmFyY2xvdWQuaW8vYXBpIgoKCmRlZiBzb25hcl9nZXQocGF0aCwgcGFyYW1zPU5vbmUpOgogICAgdXJsID0gIiVzLyVzIiAlIChCQVNFX1VSTCwgcGF0aCkKICAgIGlmIHBhcmFtczoKICAgICAgICB1cmwgKz0gIj8iICsgdXJsbGliLnBhcnNlLnVybGVuY29kZShwYXJhbXMpCiAgICByZXEgPSB1cmxsaWIucmVxdWVzdC5SZXF1ZXN0KHVybCwgaGVhZGVycz17IkF1dGhvcml6YXRpb24iOiAiQmVhcmVyICIgKyBUT0tFTn0pCiAgICB3aXRoIHVybGxpYi5yZXF1ZXN0LnVybG9wZW4ocmVxLCB0aW1lb3V0PTMwKSBhcyByOgogICAgICAgIHJldHVybiBqc29uLmxvYWRzKHIucmVhZCgpKQoKCk1FVFJJQ19LRVlTID0gKAogICAgImJ1Z3MsdnVsbmVyYWJpbGl0aWVzLGNvZGVfc21lbGxzLHNlY3VyaXR5X2hvdHNwb3RzLCIKICAgICJjb3ZlcmFnZSxkdXBsaWNhdGVkX2xpbmVzX2RlbnNpdHksbmNsb2Msc3FhbGVfcmF0aW5nLCIKICAgICJyZWxpYWJpbGl0eV9yYXRpbmcsc2VjdXJpdHlfcmF0aW5nIgopCm1ldHJpY3NfZGF0YSA9IHNvbmFyX2dldCgibWVhc3VyZXMvY29tcG9uZW50IiwgeyJjb21wb25lbnQiOiBQUk9KRUNUX0tFWSwgIm1ldHJpY0tleXMiOiBNRVRSSUNfS0VZU30pCm1lYXN1cmVzID0ge21bIm1ldHJpYyJdOiBtLmdldCgidmFsdWUiLCAiTi9BIikgZm9yIG0gaW4gbWV0cmljc19kYXRhLmdldCgiY29tcG9uZW50Iiwge30pLmdldCgibWVhc3VyZXMiLCBbXSl9CgphbGxfaXNzdWVzID0gW10KcGFnZSA9IDEKd2hpbGUgVHJ1ZToKICAgIGRhdGEgPSBzb25hcl9nZXQoImlzc3Vlcy9zZWFyY2giLCB7ImNvbXBvbmVudEtleXMiOiBQUk9KRUNUX0tFWSwgInJlc29sdmVkIjogImZhbHNlIiwgInBzIjogNTAwLCAicCI6IHBhZ2V9KQogICAgYWxsX2lzc3Vlcy5leHRlbmQoZGF0YS5nZXQoImlzc3VlcyIsIFtdKSkKICAgIHBhZ2luZyA9IGRhdGEuZ2V0KCJwYWdpbmciLCB7fSkKICAgIGlmIHBhZ2luZy5nZXQoInBhZ2VJbmRleCIsIDEpICogcGFnaW5nLmdldCgicGFnZVNpemUiLCA1MDApID49IHBhZ2luZy5nZXQoInRvdGFsIiwgMCk6CiAgICAgICAgYnJlYWsKICAgIHBhZ2UgKz0gMQoKbGluZXMgPSBbXQpsaW5lcy5hcHBlbmQoIj0iICogNjApCmxpbmVzLmFwcGVuZCgiICBTb25hckNsb3VkIFJlcG9ydCAtLSAiICsgUFJPSkVDVF9LRVkpCmxpbmVzLmFwcGVuZCgiPSIgKiA2MCkKbGluZXMuYXBwZW5kKCIiKQpsaW5lcy5hcHBlbmQoIk1FVFJJQ1MiKQpsaW5lcy5hcHBlbmQoIi0iICogNDApCmxhYmVsX21hcCA9IHsKICAgICJidWdzIjogIkJ1Z3MiLAogICAgInZ1bG5lcmFiaWxpdGllcyI6ICJWdWxuZXJhYmlsaXRpZXMiLAogICAgImNvZGVfc21lbGxzIjogIkNvZGUgU21l... (line truncated to 2000 chars)
-          python3 /tmp/extract_sonar.py
+        run: python3 .github/scripts/extract_sonar_report.py
 
       - name: Upload SonarCloud report
         uses: actions/upload-artifact@v7
@@ -314,4 +315,96 @@ jobs:
           fi
           
           echo "SUCCESS: No critical issues found in SonarCloud!"
-          retention-days: 7
+
+  build:
+    name: Build — vyx build
+    runs-on: ubuntu-latest
+    container: golang:1.25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.9'
+      - name: Run vyx build
+        working-directory: examples/hello-world
+        run: |
+          go run ../../cmd/vyx build
+      - name: Verify artifacts
+        working-directory: examples/hello-world
+        run: |
+          test -f route_map.json || exit 1
+          echo "route_map.json generated successfully"
+
+  annotate:
+    name: Annotations — Validate
+    runs-on: ubuntu-latest
+    container: golang:1.25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.9'
+
+      - name: Validate annotations in examples/hello-world
+        working-directory: examples/hello-world
+        run: |
+          go run ../../cmd/vyx annotate
+
+  coverage-report:
+    name: Coverage Report
+    runs-on: ubuntu-latest
+    needs: [go-test, python-sdk-test, node-sdk-test]
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Download Go coverage
+        uses: actions/download-artifact@v8
+        with:
+          name: go-coverage
+
+      - name: Download Python coverage
+        uses: actions/download-artifact@v8
+        with:
+          name: python-coverage
+
+      - name: Build coverage report
+        id: coverage
+        run: |
+          echo "## Coverage Report" > report.md
+          echo "" >> report.md
+
+          echo "### Go" >> report.md
+          echo '```' >> report.md
+          go tool cover -func=coverage.txt 2>/dev/null || echo "Coverage file not found" >> report.md
+          echo '```' >> report.md
+          echo "" >> report.md
+
+          echo "### Python" >> report.md
+          echo '```' >> report.md
+          python3 .github/scripts/coverage_report.py >> report.md 2>/dev/null || echo "Python coverage file not found" >> report.md
+          echo '```' >> report.md
+
+      - name: Find Comment
+        uses: peter-evans/find-comment@v3
+        id: fc
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: 'Coverage Report'
+
+      - name: Create or update comment
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.fc.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: report.md
+          edit-mode: replace

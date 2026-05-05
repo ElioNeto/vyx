@@ -14,7 +14,7 @@ func newTestServiceNoSkip(manager worker.Manager) (*lifecycle.Service, *mockPubl
 	repo := newMemRepo()
 	pub := &mockPublisher{}
 	drainer := lifecycle.NewWorkerDrainer()
-	return lifecycle.NewService(repo, manager, pub, nil, nil, drainer), pub
+	return lifecycle.NewService(repo, manager, pub, nil, nil, drainer, nil), pub
 }
 
 // TestSpawnWorker_RuntimeNeedsProvisioning tests the provisioning path.

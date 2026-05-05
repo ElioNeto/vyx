@@ -47,7 +47,7 @@ func newTestServiceWithMocks(manager worker.Manager, transport ipc.Transport, re
 	repo := newMemRepo()
 	pub := &mockPublisher{}
 	drainer := lifecycle.NewWorkerDrainer()
-	return lifecycle.NewService(repo, manager, pub, transport, receiver, drainer), pub
+	return lifecycle.NewService(repo, manager, pub, transport, receiver, drainer, nil), pub
 }
 
 // TestRestartWorker_WithTransportError tests transport.Register failure.

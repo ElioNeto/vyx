@@ -44,7 +44,7 @@ func newTestService(manager worker.Manager) (*lifecycle.Service, *mockPublisher)
 	repo := newMemRepo()
 	pub := &mockPublisher{}
 	drainer := lifecycle.NewWorkerDrainer()
-	return lifecycle.NewService(repo, manager, pub, nil, nil, drainer), pub
+	return lifecycle.NewService(repo, manager, pub, nil, nil, drainer, nil), pub
 }
 
 // minimal in-memory repo for tests
