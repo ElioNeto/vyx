@@ -1,6 +1,7 @@
 package codec
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"strconv"
@@ -281,7 +282,7 @@ func toFloat64(v any) float64 {
 }
 
 func recordToIPC(rec arrow.Record) ([]byte, error) {
-	var buf memory.Buffer
+	var buf bytes.Buffer
 	w := ipc.NewWriter(&buf, ipc.WithSchema(rec.Schema()))
 	if err := w.Write(rec); err != nil {
 		return nil, fmt.Errorf("arrow: ipc write: %w", err)
@@ -293,11 +294,11 @@ func recordToIPC(rec arrow.Record) ([]byte, error) {
 }
 
 func ipcToRecord(data []byte) (arrow.Record, error) {
-	reader, err := ipc.NewReader(&memory.BufferBytes(data))
+	buf := memory.NewBufferBytes(data)
+	reader, err := ipc.NewReader(bytes.NewReader(buf.Bytes()))
 	if err != nil {
 		return nil, fmt.Errorf("arrow: ipc reader: %w", err)
 	}
-	defer reader.Close()
 
 	if !reader.Next() {
 		return nil, fmt.Errorf("arrow: no record in IPC data")

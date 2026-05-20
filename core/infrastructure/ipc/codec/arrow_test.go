@@ -1,10 +1,25 @@
 package codec_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/ElioNeto/vyx/core/infrastructure/ipc/codec"
 )
+
+// equal compares two values with tolerant numeric handling.
+// Arrow serialises integers as int64, so we compare their string
+// representations when the types differ but values are numerically equal.
+func equal(got, want any) bool {
+	if got == want {
+		return true
+	}
+	// Handle numeric type mismatch (e.g. int vs int64)
+	if fmt.Sprint(got) == fmt.Sprint(want) {
+		return true
+	}
+	return false
+}
 
 func TestArrowCodec_RoundTrip_MapSlice(t *testing.T) {
 	c := codec.ArrowCodec{}
@@ -36,7 +51,7 @@ func TestArrowCodec_RoundTrip_MapSlice(t *testing.T) {
 				t.Errorf("row %d: missing key %q", i, k)
 				continue
 			}
-			if gotVal != wantVal {
+			if !equal(gotVal, wantVal) {
 				t.Errorf("row %d, key %q: want %v, got %v", i, k, wantVal, gotVal)
 			}
 		}
@@ -72,7 +87,7 @@ func TestArrowCodec_RoundTrip_SingleMap(t *testing.T) {
 			t.Errorf("missing key %q", k)
 			continue
 		}
-		if gotVal != wantVal {
+		if !equal(gotVal, wantVal) {
 			t.Errorf("key %q: want %v, got %v", k, wantVal, gotVal)
 		}
 	}

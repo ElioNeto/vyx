@@ -24,6 +24,17 @@ const (
 	TypeWSMessage MessageType = 0x07
 	// TypeWSClose signals that a WebSocket session has ended (0x08). #19
 	TypeWSClose MessageType = 0x08
+
+	// TypeStreamStart signals the beginning of a streaming transfer (0x09). #7
+	TypeStreamStart MessageType = 0x09
+	// TypeStreamChunk carries a chunk of streaming data (0x0A). #7
+	TypeStreamChunk MessageType = 0x0A
+	// TypeStreamEnd signals the end of a streaming transfer (0x0B). #7
+	TypeStreamEnd MessageType = 0x0B
+	// TypeArrowData carries an Arrow IPC payload inline (0x0C). #7
+	TypeArrowData MessageType = 0x0C
+	// TypeArrowSHM carries a shared-memory descriptor for Arrow zero-copy (0x0D). #7
+	TypeArrowSHM MessageType = 0x0D
 )
 
 // String returns a human-readable label for logging.
@@ -45,6 +56,16 @@ func (t MessageType) String() string {
 		return "ws_message"
 	case TypeWSClose:
 		return "ws_close"
+	case TypeStreamStart:
+		return "stream_start"
+	case TypeStreamChunk:
+		return "stream_chunk"
+	case TypeStreamEnd:
+		return "stream_end"
+	case TypeArrowData:
+		return "arrow_data"
+	case TypeArrowSHM:
+		return "arrow_shm"
 	default:
 		return fmt.Sprintf("unknown(0x%02x)", byte(t))
 	}
