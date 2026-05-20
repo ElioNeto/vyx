@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -48,7 +49,7 @@ func parseTSXFile(path, workerID string) ([]Route, []AnnotationError) {
 
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, nil
+		return nil, []AnnotationError{{File: path, Line: 0, Message: fmt.Sprintf("cannot open file: %v", err)}}
 	}
 	defer func() { _ = f.Close() }()
 
