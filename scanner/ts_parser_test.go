@@ -48,16 +48,12 @@ export default function DashboardPage() {}
 }
 
 func TestParseTSFile_FileOpenError(t *testing.T) {
-	// Create a file with no read permissions
-	tmpDir := t.TempDir()
-	path := filepath.Join(tmpDir, "noaccess.ts")
-	os.WriteFile(path, []byte("test"), 0000)
-	defer os.Chmod(path, 0644) // Restore permissions for cleanup
-
-	routes, errs := parseTSFile(path, "node:bad")
+	// Use a non-existent path — works reliably regardless of OS permissions
+	routes, errs := parseTSFile("/nonexistent/path/file.ts", "node:bad")
 	assert.Empty(t, routes)
-	assert.Len(t, errs, 1)
-	assert.Contains(t, errs[0].Message, "cannot open file")
+	if assert.Len(t, errs, 1, "expected 1 error for file open failure") {
+		assert.Contains(t, errs[0].Message, "cannot open file")
+	}
 }
 
 func TestParseTSFiles_WalkError(t *testing.T) {
