@@ -54,7 +54,7 @@ func runDev(args []string) {
 
 	// Build the core binary first so we run the compiled version.
 	fmt.Println("🔧 Building core...")
-	build := exec.Command("go", "build", "-o", ".vyx/core", "github.com/ElioNeto/vyx/core/cmd/vyx")
+	build := exec.Command("go", "build", "-buildvcs=false", "-o", ".vyx/core", "github.com/ElioNeto/vyx/core/cmd/vyx")
 	build.Stdout = os.Stdout
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
