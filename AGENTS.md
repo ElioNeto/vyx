@@ -6,12 +6,18 @@
 
 ## Projeto
 
-> Nome do projeto, objetivo principal e contexto de negócio em 2-3 frases.
+**vyx** — um framework full-stack poliglota de alta performance onde um Core Orchestrator em Go gerencia workers em Go, Node.js e Python. Roteamento baseado em anotações estáticas (@Route, @Auth, @Validate, @Page) que geram um route_map.json consumido pelo Core.
 
 ## Stack
 
-> Liste as tecnologias principais: linguagem, framework, banco de dados, infra.
-> Exemplo: Node.js 20 + TypeScript, Fastify, PostgreSQL, Docker.
+- **Core**: Go 1.25, Clean Architecture (domain → application → infrastructure)
+- **Workers**: Node.js (TypeScript, @vyx/worker), Python 3.12 (vyx package), Go
+- **IPC**: Unix Domain Sockets + MsgPack + Apache Arrow (protocolo binário)
+- **Scanner**: Go puro — parse estático de anotações em Go/TS/TSX/Python
+- **HTTP Gateway**: JWT, JSON Schema, Rate Limiter, Circuit Breaker
+- **CLI**: Cobra (Go) — dev, build, new, annotate
+- **CI/CD**: GitHub Actions (12+ jobs), Docker multi-stage, SonarCloud, Codecov
+- **TUI**: Bubble Tea (Go) para log tailing
 
 <!-- AUTO-GENERATED:START -->
 ## Regras gerais
@@ -96,36 +102,63 @@ govulncheck ./...
 
 ## Comandos úteis
 
-> Preencha com os comandos exatos do projeto. O agente usará estes comandos diretamente.
-
 ```bash
-# Instalar dependências
-npm install
+# Core (Go) — build, test, lint
+cd core && go build ./...
+cd core && go test ./... -race -count=1
+cd core && go vet ./...
+cd core && golangci-lint run
+cd core && govulncheck ./...
 
-# Rodar testes
-npm test
+# Scanner (Go)
+cd scanner && go test ./... -race -count=1
 
-# Lint
-npm run lint
+# Node.js Worker SDK
+cd packages/worker && npm install
+cd packages/worker && npm test
+cd packages/worker && npm run lint
 
-# Build
-npm run build
+# Python Worker SDK
+cd packages/python && pip install -e .
+cd packages/python && python -m pytest tests/ -v
+cd packages/python && ruff check .
 
-# Dev
-npm run dev
+# Workflow agent (local CI)
+cd scripts && npm install && npx tsx workflow-agent.ts
+
+# Check task state
+cd scripts && npx tsx check-todos.ts
+
+# CLI
+cd core && go build -o ../bin/vyx ./cmd/vyx
+./bin/vyx dev   # start dev mode
+./bin/vyx build # build project
+./bin/vyx annotate # scan annotations
+./bin/vyx new <name> # scaffold project
 ```
 
 ## Convenções
 
-> Preencha com as convenções do projeto.
-
-- **Commits**: Conventional Commits (`feat`, `fix`, `chore`, `docs`, `refactor`)
+- **Commits**: Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`, `perf:`)
+- **Scopes**: `core`, `scanner`, `worker`, `python`, `cli`, `infra`, `docs`
 - **Branches**: `feat/<slug>`, `fix/<slug>`, `chore/<slug>`
-- **Naming**: camelCase para variáveis/funções, PascalCase para classes/tipos
-- **Testes**: arquivos `*.test.ts` ao lado do módulo testado
-- **Estrutura de pastas**: descreva aqui
+- **Go naming**: camelCase vars/funcs, PascalCase exports, interfaces suffix `-er`
+- **Testes Go**: `*_test.go` mesmo pacote, table-driven tests, testify
+- **Testes Node**: `vitest`, arquivos `*.test.ts`
+- **Testes Python**: `pytest`, arquivos `test_*.py`
+- **Estrutura**: Clean Architecture em `core/` (domain → application → infrastructure)
 
 ## Contexto de domínio
 
-> Glossário de termos do negócio que o agente precisa entender para implementar corretamente.
-> Exemplo: "Pedido" = entidade central; "Fulfillment" = processo de separação e envio.
+| Termo | Definição |
+|-------|-----------|
+| **Core** | Processo Go que orquestra tudo (HTTP gateway + worker manager) |
+| **Worker** | Processo filho (Go/Node/Python) que executa lógica de negócio |
+| **RouteMap** | Trie de rotas construída a partir de route_map.json (hot-swappable) |
+| **RouteEntry** | Path + Method + WorkerID + AuthRoles + Validate + Type |
+| **Annotation** | @Route, @Auth, @Validate, @Page em comentários de código fonte |
+| **Circuit Breaker** | Máquina de estados (Closed → Open → Half-Open) por rota |
+| **Worker Pool** | Múltiplos réplicas do mesmo worker com round-robin |
+| **UDS** | Unix Domain Sockets para IPC core-worker |
+| **Handshake** | Protocolo de registro do worker ao conectar |
+| **Heartbeat** | Ping periódico (5s) do worker para o core |

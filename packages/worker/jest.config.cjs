@@ -1,3 +1,4 @@
+/** @type {import('ts-jest').JestConfigWithTsJest} */
 module.exports = {
   testEnvironment: 'node',
   testMatch: ['**/tests/**/*.test.ts'],
@@ -15,12 +16,6 @@ module.exports = {
     '^(\\.?.*)\\.js$': '$1',
   },
   extensionsToTreatAsEsm: ['.ts'],
-  preset: 'ts-jest/presets/default-esm',
-  globals: {
-    'ts-jest': {
-      useESM: true,
-    },
-  },
   coverageThreshold: {
     global: {
       statements: 95,
@@ -32,5 +27,6 @@ module.exports = {
   collectCoverageFrom: [
     'src/**/*.ts',
     '!src/**/*.d.ts',
+    '!src/mocks/**',
   ],
 };

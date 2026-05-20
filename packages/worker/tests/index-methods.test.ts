@@ -1,5 +1,5 @@
 import { describe, it, expect, jest } from '@jest/globals';
-import * as index from '../src/index.js';
+import { worker as workerObj, logger as loggerObj, createResponse as createResponseFn, json as jsonFn, text as textFn, error as errorFn, getCorrelationId, runInRequestContext, runInRequestContextAsync, requestContext } from '../src/index.js';
 
 describe('Index Methods Coverage', () => {
   describe('logger methods', () => {
@@ -20,7 +20,7 @@ describe('Index Methods Coverage', () => {
     });
 
     it('should call logger.info', () => {
-      index.logger.info('test message', { key: 'value' });
+      loggerObj.info('test message', { key: 'value' });
       expect(mockConsoleLog).toHaveBeenCalled();
       const logged = JSON.parse(mockConsoleLog.mock.calls[0][0]);
       expect(logged.level).toBe('info');
@@ -28,7 +28,7 @@ describe('Index Methods Coverage', () => {
     });
 
     it('should call logger.error', () => {
-      index.logger.error('test error', { key: 'value' });
+      loggerObj.error('test error', { key: 'value' });
       expect(mockConsoleError).toHaveBeenCalled();
       const logged = JSON.parse(mockConsoleError.mock.calls[0][0]);
       expect(logged.level).toBe('error');
@@ -36,7 +36,7 @@ describe('Index Methods Coverage', () => {
     });
 
     it('should call logger.warn', () => {
-      index.logger.warn('test warning', { key: 'value' });
+      loggerObj.warn('test warning', { key: 'value' });
       expect(mockConsoleWarn).toHaveBeenCalled();
       const logged = JSON.parse(mockConsoleWarn.mock.calls[0][0]);
       expect(logged.level).toBe('warn');
@@ -44,7 +44,7 @@ describe('Index Methods Coverage', () => {
     });
 
     it('should call logger.debug', () => {
-      index.logger.debug('test debug', { key: 'value' });
+      loggerObj.debug('test debug', { key: 'value' });
       expect(mockConsoleLog).toHaveBeenCalled();
       const logged = JSON.parse(mockConsoleLog.mock.calls[0][0]);
       expect(logged.level).toBe('debug');
@@ -54,54 +54,54 @@ describe('Index Methods Coverage', () => {
 
   describe('worker methods', () => {
     it('should call worker.get', () => {
-      index.worker.get('/test-path', () => Promise.resolve({ status_code: 200, body: {} }));
+      workerObj.get('/test-path', () => Promise.resolve({ status_code: 200, body: {} }));
     });
 
     it('should call worker.post', () => {
-      index.worker.post('/test-path', () => Promise.resolve({ status_code: 201, body: {} }));
+      workerObj.post('/test-path', () => Promise.resolve({ status_code: 201, body: {} }));
     });
 
     it('should call worker.put', () => {
-      index.worker.put('/test-path', () => Promise.resolve({ status_code: 200, body: {} }));
+      workerObj.put('/test-path', () => Promise.resolve({ status_code: 200, body: {} }));
     });
 
     it('should call worker.patch', () => {
-      index.worker.patch('/test-path', () => Promise.resolve({ status_code: 200, body: {} }));
+      workerObj.patch('/test-path', () => Promise.resolve({ status_code: 200, body: {} }));
     });
 
     it('should call worker.delete', () => {
-      index.worker.delete('/test-path', () => Promise.resolve({ status_code: 204, body: {} }));
+      workerObj.delete('/test-path', () => Promise.resolve({ status_code: 204, body: {} }));
     });
 
     it('should call worker.start', () => {
       // Just verify the method exists and can be called (will fail to connect but that's ok)
-      expect(typeof index.worker.start).toBe('function');
+      expect(typeof workerObj.start).toBe('function');
     });
   });
 
   describe('response helpers', () => {
     it('should call createResponse', () => {
-      const resp = index.createResponse(200, { data: 'test' });
+      const resp = createResponseFn(200, { data: 'test' });
       expect(resp.status_code).toBe(200);
       expect(resp.body).toEqual({ data: 'test' });
     });
 
     it('should call json', () => {
-      const resp = index.json({ data: 'test' });
+      const resp = jsonFn({ data: 'test' });
       expect(resp.status_code).toBe(200);
       expect(resp.body).toEqual({ data: 'test' });
       expect(resp.headers).toEqual({ 'Content-Type': 'application/json' });
     });
 
     it('should call text', () => {
-      const resp = index.text('hello world');
+      const resp = textFn('hello world');
       expect(resp.status_code).toBe(200);
       expect(resp.body).toBe('hello world');
       expect(resp.headers).toEqual({ 'Content-Type': 'text/plain' });
     });
 
     it('should call error', () => {
-      const resp = index.error('something went wrong');
+      const resp = errorFn('something went wrong');
       expect(resp.status_code).toBe(500);
       expect(resp.body).toEqual({ error: 'something went wrong' });
     });
@@ -109,38 +109,23 @@ describe('Index Methods Coverage', () => {
 
   describe('context helpers', () => {
     it('should call getCorrelationId', () => {
-      const id = index.getCorrelationId();
+      const id = getCorrelationId();
       // id may be undefined if not in request context, but should be string or undefined
       expect(id === undefined || typeof id === 'string').toBe(true);
     });
 
     it('should call runInRequestContext', () => {
-      const result = index.runInRequestContext('test-id', () => 'result');
+      const result = runInRequestContext('test-id', () => 'result');
       expect(result).toBe('result');
     });
 
     it('should call runInRequestContextAsync', async () => {
-      const result = await index.runInRequestContextAsync('test-id', async () => 'async-result');
+      const result = await runInRequestContextAsync('test-id', async () => 'async-result');
       expect(result).toBe('async-result');
     });
 
     it('should access requestContext', () => {
-      expect(index.requestContext).toBeDefined();
-    });
-  });
-
-    it('should call runInRequestContext', () => {
-      const result = index.runInRequestContext('test-id', () => 'result');
-      expect(result).toBe('result');
-    });
-
-    it('should call runInRequestContextAsync', async () => {
-      const result = await index.runInRequestContextAsync('test-id', async () => 'async-result');
-      expect(result).toBe('async-result');
-    });
-
-    it('should access requestContext', () => {
-      expect(index.requestContext).toBeDefined();
+      expect(requestContext).toBeDefined();
     });
   });
 });
