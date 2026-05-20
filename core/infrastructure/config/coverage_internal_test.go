@@ -169,8 +169,7 @@ func TestLoad_InvalidYAML(t *testing.T) {
 	path := filepath.Join(dir, "vyx.yaml")
 	os.WriteFile(path, []byte("invalid: [yaml: broken"), 0644)
 	loader := New(path, zap.NewNop())
-	_, err := loader.Load()
-	if err == nil {
+	if _, err := loader.Load(); err == nil {
 		t.Error("expected error for invalid YAML")
 	}
 }

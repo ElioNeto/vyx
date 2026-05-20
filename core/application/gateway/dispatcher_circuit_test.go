@@ -26,9 +26,8 @@ func (m *mockTransportForCircuit) Send(_ context.Context, _ string, _ ipc.Messag
 	m.sendCount++
 	return m.sendErr
 }
-func (m *mockTransportForCircuit) Receive(_ context.Context, _ string) (ipc.Message, error) {
-	m.recvCount++
-	return m.recvMsg, m.recvErr
+func (m *mockTransportForCircuit) Receive(ctx context.Context, workerID string) (ipc.Message, error) {
+	return m.ReceiveResponse(ctx, workerID)
 }
 func (m *mockTransportForCircuit) ReceiveResponse(_ context.Context, _ string) (ipc.Message, error) {
 	m.recvCount++

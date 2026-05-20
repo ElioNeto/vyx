@@ -35,13 +35,13 @@ function parseFrames(buffer: Buffer): {
     const length = buffer.readUInt32LE(offset);
     const msgType = buffer.readUInt8(offset + 4);
     if (offset + 5 + length > buffer.length) break;
-    const payload = buffer.slice(offset + 5, offset + 5 + length);
+    const payload = buffer.subarray(offset + 5, offset + 5 + length);
     frames.push({ msgType, payload });
     offset += 5 + length;
   }
   return {
     frames,
-    remaining: buffer.slice(offset),
+    remaining: buffer.subarray(offset),
   };
 }
 

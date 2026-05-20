@@ -407,7 +407,6 @@ func (d *Dispatcher) sendAndReceive(ctx context.Context, req *dgw.GatewayRequest
 	if err != nil {
 		d.releaseInFlight(lc)
 		return d.handleReceiveError(dispatchCtx, receiveErrorConfig{
-			Ctx:        ctx,
 			Req:        req,
 			Route:      &dgw.RouteEntry{WorkerID: workerID},
 			Lc:         lc,
@@ -512,7 +511,6 @@ func (d *Dispatcher) handleSendError(ctx context.Context, req *dgw.GatewayReques
 
 // receiveErrorConfig holds parameters for handleReceiveError.
 type receiveErrorConfig struct {
-	Ctx        context.Context
 	Req        *dgw.GatewayRequest
 	Route      *dgw.RouteEntry
 	Lc         *LifecycleContext
@@ -535,7 +533,7 @@ func (d *Dispatcher) handleReceiveError(ctx context.Context, cfg receiveErrorCon
 		cfg.Lc.Phase = PhasePostDispatch
 	}
 	for _, hook := range d.hooks {
-		hook.OnWorkerError(cfg.Ctx, cfg.Route.WorkerID, cfg.Req, cfg.Lc.Err)
+		hook.OnWorkerError(ctx, cfg.Route.WorkerID, cfg.Req, cfg.Lc.Err)
 	}
 	cfg.Cb.RecordFailure()
 	return nil, nil, false

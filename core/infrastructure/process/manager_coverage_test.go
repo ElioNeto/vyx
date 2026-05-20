@@ -18,7 +18,7 @@ func TestManager_New(t *testing.T) {
 
 func TestManager_NewWithOptions(t *testing.T) {
 	var loggedMessages []string
-	mockLogWriter := func(workerID string, line string) {
+	mockLogWriter := func(workerID, line string) {
 		loggedMessages = append(loggedMessages, workerID+": "+line)
 	}
 
@@ -137,7 +137,7 @@ func TestManager_StopWithTimeout(t *testing.T) {
 // Test processBufferChunk function indirectly through pipeLog
 func TestManager_PipeLog(t *testing.T) {
 	var loggedLines []string
-	mockLogWriter := func(workerID string, line string) {
+	mockLogWriter := func(workerID, line string) {
 		loggedLines = append(loggedLines, line)
 	}
 	
