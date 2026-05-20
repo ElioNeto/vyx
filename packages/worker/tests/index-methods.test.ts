@@ -54,23 +54,33 @@ describe('Index Methods Coverage', () => {
 
   describe('worker methods', () => {
     it('should call worker.get', () => {
-      workerObj.get('/test-path', () => Promise.resolve({ status_code: 200, body: {} }));
+      expect(() => {
+        workerObj.get('/test-path', () => Promise.resolve({ status_code: 200, body: {} }));
+      }).not.toThrow();
     });
 
     it('should call worker.post', () => {
-      workerObj.post('/test-path', () => Promise.resolve({ status_code: 201, body: {} }));
+      expect(() => {
+        workerObj.post('/test-path', () => Promise.resolve({ status_code: 201, body: {} }));
+      }).not.toThrow();
     });
 
     it('should call worker.put', () => {
-      workerObj.put('/test-path', () => Promise.resolve({ status_code: 200, body: {} }));
+      expect(() => {
+        workerObj.put('/test-path', () => Promise.resolve({ status_code: 200, body: {} }));
+      }).not.toThrow();
     });
 
     it('should call worker.patch', () => {
-      workerObj.patch('/test-path', () => Promise.resolve({ status_code: 200, body: {} }));
+      expect(() => {
+        workerObj.patch('/test-path', () => Promise.resolve({ status_code: 200, body: {} }));
+      }).not.toThrow();
     });
 
     it('should call worker.delete', () => {
-      workerObj.delete('/test-path', () => Promise.resolve({ status_code: 204, body: {} }));
+      expect(() => {
+        workerObj.delete('/test-path', () => Promise.resolve({ status_code: 204, body: {} }));
+      }).not.toThrow();
     });
 
     it('should call worker.start', () => {

@@ -151,66 +151,86 @@ func buildRecord(schema *arrow.Schema, cols [][]any, numRows int) (arrow.Record,
 func buildColumn(pool memory.Allocator, dt arrow.DataType, col []any, numRows int) (arrow.Array, error) {
 	switch dt.ID() {
 	case arrow.INT64:
-		b := array.NewInt64Builder(pool)
-		defer b.Release()
-		b.Resize(numRows)
-		for _, v := range col {
-			if v == nil {
-				b.AppendNull()
-			} else {
-				b.Append(toInt64(v))
-			}
-		}
-		return b.NewArray(), nil
+		return buildInt64Column(pool, col, numRows)
 	case arrow.FLOAT64:
-		b := array.NewFloat64Builder(pool)
-		defer b.Release()
-		b.Resize(numRows)
-		for _, v := range col {
-			if v == nil {
-				b.AppendNull()
-			} else {
-				b.Append(toFloat64(v))
-			}
-		}
-		return b.NewArray(), nil
+		return buildFloat64Column(pool, col, numRows)
 	case arrow.BOOL:
-		b := array.NewBooleanBuilder(pool)
-		defer b.Release()
-		b.Resize(numRows)
-		for _, v := range col {
-			if v == nil {
-				b.AppendNull()
-			} else {
-				b.Append(v.(bool))
-			}
-		}
-		return b.NewArray(), nil
+		return buildBoolColumn(pool, col, numRows)
 	case arrow.BINARY:
-		b := array.NewBinaryBuilder(pool, dt.(*arrow.BinaryType))
-		defer b.Release()
-		b.Resize(numRows)
-		for _, v := range col {
-			if v == nil {
-				b.AppendNull()
-			} else {
-				b.Append(v.([]byte))
-			}
-		}
-		return b.NewArray(), nil
+		return buildBinaryColumn(pool, dt, col, numRows)
 	default:
-		b := array.NewStringBuilder(pool)
-		defer b.Release()
-		b.Resize(numRows)
-		for _, v := range col {
-			if v == nil {
-				b.AppendNull()
-			} else {
-				b.Append(fmt.Sprintf("%v", v))
-			}
-		}
-		return b.NewArray(), nil
+		return buildStringColumn(pool, col, numRows)
 	}
+}
+
+func buildInt64Column(pool memory.Allocator, col []any, numRows int) (arrow.Array, error) {
+	b := array.NewInt64Builder(pool)
+	defer b.Release()
+	b.Resize(numRows)
+	for _, v := range col {
+		if v == nil {
+			b.AppendNull()
+		} else {
+			b.Append(toInt64(v))
+		}
+	}
+	return b.NewArray(), nil
+}
+
+func buildFloat64Column(pool memory.Allocator, col []any, numRows int) (arrow.Array, error) {
+	b := array.NewFloat64Builder(pool)
+	defer b.Release()
+	b.Resize(numRows)
+	for _, v := range col {
+		if v == nil {
+			b.AppendNull()
+		} else {
+			b.Append(toFloat64(v))
+		}
+	}
+	return b.NewArray(), nil
+}
+
+func buildBoolColumn(pool memory.Allocator, col []any, numRows int) (arrow.Array, error) {
+	b := array.NewBooleanBuilder(pool)
+	defer b.Release()
+	b.Resize(numRows)
+	for _, v := range col {
+		if v == nil {
+			b.AppendNull()
+		} else {
+			b.Append(v.(bool))
+		}
+	}
+	return b.NewArray(), nil
+}
+
+func buildBinaryColumn(pool memory.Allocator, dt arrow.DataType, col []any, numRows int) (arrow.Array, error) {
+	b := array.NewBinaryBuilder(pool, dt.(*arrow.BinaryType))
+	defer b.Release()
+	b.Resize(numRows)
+	for _, v := range col {
+		if v == nil {
+			b.AppendNull()
+		} else {
+			b.Append(v.([]byte))
+		}
+	}
+	return b.NewArray(), nil
+}
+
+func buildStringColumn(pool memory.Allocator, col []any, numRows int) (arrow.Array, error) {
+	b := array.NewStringBuilder(pool)
+	defer b.Release()
+	b.Resize(numRows)
+	for _, v := range col {
+		if v == nil {
+			b.AppendNull()
+		} else {
+			b.Append(fmt.Sprintf("%v", v))
+		}
+	}
+	return b.NewArray(), nil
 }
 
 func toInt64(v any) int64 {
