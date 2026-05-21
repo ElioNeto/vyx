@@ -209,6 +209,26 @@ func (s *Service) StopAll(ctx context.Context) error {
 	return lastErr
 }
 
+// RestartAll gracefully restarts all alive workers with zero downtime.
+// Each worker is drained before restart so no in-flight requests are dropped. #10
+func (s *Service) RestartAll(ctx context.Context) error {
+	workers, err := s.repo.FindAll(ctx)
+	if err != nil {
+		return err
+	}
+
+	var lastErr error
+	for _, w := range workers {
+		if !w.IsAlive() {
+			continue
+		}
+		if err := s.RestartWorker(ctx, w.ID); err != nil {
+			lastErr = err
+		}
+	}
+	return lastErr
+}
+
 // RecordHeartbeat updates the last heartbeat timestamp for a worker.
 func (s *Service) RecordHeartbeat(ctx context.Context, id string) error {
 	w, err := s.repo.FindByID(ctx, id)

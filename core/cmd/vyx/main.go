@@ -34,6 +34,7 @@ import (
 	dgw "github.com/ElioNeto/vyx/core/domain/gateway"
 	"github.com/ElioNeto/vyx/core/domain/circuit"
 	"github.com/ElioNeto/vyx/core/domain/ipc"
+	"github.com/ElioNeto/vyx/core/domain/pool"
 	dlog "github.com/ElioNeto/vyx/core/domain/log"
 	infracfg "github.com/ElioNeto/vyx/core/infrastructure/config"
 	infragw "github.com/ElioNeto/vyx/core/infrastructure/gateway"
@@ -584,10 +585,11 @@ func runServer(devMode, withTUI bool) {
 	transport := setupTransport(cfg, log)
 
 	repo, drainer, manager, publisher := setupCoreServices(mux.mux, log)
-	hbReceiver, service, healthMonitor := setupLifecycleServices(transport, repo, manager, publisher, drainer, log)
+	poolMgr := pool.NewManager(repo, manager)
+	hbReceiver, service, healthMonitor := setupLifecycleServices(transport, repo, manager, publisher, drainer, log, poolMgr)
 
 	jwtValidator, schemaValidator := setupValidators(cfg, log)
-	dispatcher := setupDispatcher(rm, transport, jwtValidator, schemaValidator, cfg, drainer, log)
+	dispatcher := setupDispatcher(rm, transport, jwtValidator, schemaValidator, cfg, drainer, log, poolMgr)
 
 	rateLimiter := setupRateLimiter(cfg)
 	gwCfg := setupHTTPServerConfig(devMode)
@@ -707,10 +709,11 @@ func setupLifecycleServices(
 	publisher *logger.EventPublisher,
 	drainer *lifecycle.WorkerDrainer,
 	log *zap.Logger,
+	poolMgr *pool.Manager,
 ) (*heartbeat.Receiver, *lifecycle.Service, *monitor.Monitor) {
 	hbCfg := heartbeat.DefaultConfig()
 	hbReceiver := heartbeat.NewReceiver(transport, repo, nil, hbCfg, log)
-	service := lifecycle.NewService(repo, manager, publisher, transport, hbReceiver, drainer, nil)
+	service := lifecycle.NewService(repo, manager, publisher, transport, hbReceiver, drainer, poolMgr)
 	hbReceiver.SetService(service)
 	healthMonitor := monitor.New(service, repo)
 	return hbReceiver, service, healthMonitor
@@ -735,6 +738,7 @@ func setupDispatcher(
 	cfg *doamincfg.Config,
 	drainer *lifecycle.WorkerDrainer,
 	log *zap.Logger,
+	poolMgr *pool.Manager,
 ) *apgw.Dispatcher {
 	return apgw.NewDispatcher(apgw.DispatcherConfig{
 		Routes:    rm,
@@ -744,6 +748,7 @@ func setupDispatcher(
 		Timeout:   cfg.Security.GlobalTimeout,
 		Log:       log,
 		Drainer:   drainer,
+		PoolMgr:   poolMgr,
 	}, circuit.Config{
 		Failures:    cfg.Security.CircuitBreaker.Failures,
 		Cooldown:    cfg.Security.CircuitBreaker.Cooldown,
@@ -779,6 +784,24 @@ func setupSignalHandling() (context.Context, context.CancelFunc) {
 	return ctx, stop
 }
 
+// startSigUsr1Handler listens for SIGUSR1 and triggers zero-downtime reload.
+// When SIGUSR1 is received, all workers are gracefully restarted without
+// dropping in-flight requests (drain before stop). #10
+func startSigUsr1Handler(log *zap.Logger, service *lifecycle.Service) {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGUSR1)
+	go func() {
+		for range sigCh {
+			log.Info("received SIGUSR1 — triggering zero-downtime worker reload")
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			if err := service.RestartAll(ctx); err != nil {
+				log.Error("SIGUSR1 reload: RestartAll failed", zap.Error(err))
+			}
+			cancel()
+		}
+	}()
+}
+
 // startServicesConfig holds parameters for startServices to reduce parameter count.
 type startServicesConfig struct {
 	DevMode       bool
@@ -810,6 +833,9 @@ func startServices(ctx context.Context, cfg startServicesConfig) {
 			}
 		}()
 	}
+
+	// SIGUSR1 triggers zero-downtime reload of all workers (production) #10
+	startSigUsr1Handler(cfg.Log, cfg.Service)
 
 	if cfg.DevMode {
 		go hotReloadWatcher(ctx, os.Getenv("VYX_CONFIG"), cfg.Cfg.Workers, cfg.Service, cfg.Log)
