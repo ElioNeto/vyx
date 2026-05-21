@@ -1,6 +1,7 @@
 package codec
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/ElioNeto/vyx/core/domain/ipc"
@@ -84,13 +85,18 @@ func NewStreamAssembler() *StreamAssembler {
 func (a *StreamAssembler) Feed(msg ipc.Message) ([]byte, error) {
 	switch msg.Type {
 	case ipc.TypeStreamStart:
-		var streamID string
-		var totalSize int
-		if _, err := fmt.Sscanf(string(msg.Payload), `{"stream_id":"%s","total_size":%d}`, &streamID, &totalSize); err != nil {
+		var startMsg struct {
+			StreamID  string `json:"stream_id"`
+			TotalSize int    `json:"total_size"`
+		}
+		if err := json.Unmarshal(msg.Payload, &startMsg); err != nil {
 			return nil, fmt.Errorf("stream: parse start: %w", err)
 		}
-		a.streams[streamID] = &streamState{
-			totalSize: totalSize,
+		if startMsg.StreamID == "" {
+			return nil, fmt.Errorf("stream: empty stream_id in start message")
+		}
+		a.streams[startMsg.StreamID] = &streamState{
+			totalSize: startMsg.TotalSize,
 		}
 		return nil, nil
 
@@ -103,15 +109,17 @@ func (a *StreamAssembler) Feed(msg ipc.Message) ([]byte, error) {
 		return nil, nil
 
 	case ipc.TypeStreamEnd:
-		var streamID string
-		if _, err := fmt.Sscanf(string(msg.Payload), `{"stream_id":"%s"}`, &streamID); err != nil {
+		var endMsg struct {
+			StreamID string `json:"stream_id"`
+		}
+		if err := json.Unmarshal(msg.Payload, &endMsg); err != nil {
 			return nil, fmt.Errorf("stream: parse end: %w", err)
 		}
-		state, ok := a.streams[streamID]
+		state, ok := a.streams[endMsg.StreamID]
 		if !ok {
-			return nil, fmt.Errorf("stream: unknown stream %s", streamID)
+			return nil, fmt.Errorf("stream: unknown stream %s", endMsg.StreamID)
 		}
-		delete(a.streams, streamID)
+		delete(a.streams, endMsg.StreamID)
 
 		total := make([]byte, 0, state.totalSize)
 		for _, chunk := range state.chunks {
