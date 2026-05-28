@@ -76,7 +76,7 @@ func (m *Manager) Spawn(ctx context.Context, w *worker.Worker) error {
 	var (
 		outWriter  io.WriteCloser
 		errWriter  io.WriteCloser
-		cancel     context.CancelFunc
+		cancel     context.CancelFunc = func() {} // no-op default; replaced below when pipe logging
 		workerCtx  context.Context
 	)
 	if m.logWriter != nil {
