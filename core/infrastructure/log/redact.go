@@ -29,7 +29,6 @@ var DefaultSensitiveFields = []string{
 // by "[REDACTED]". It handles both "key=value" and JSON-like formats.
 // For structured logging, RedactFields should be used instead.
 func Redact(input string) string {
-	lower := strings.ToLower(input)
 	result := input
 	for _, field := range DefaultSensitiveFields {
 		// Match patterns like: password=abc123, "password":"abc123"

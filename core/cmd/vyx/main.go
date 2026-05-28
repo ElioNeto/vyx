@@ -737,8 +737,8 @@ func setupValidators(cfg *doamincfg.Config, log *zap.Logger) (*infragw.JWTValida
 	}
 	jwtValidator := infragw.NewJWTValidatorWithClaims(
 		[]byte(jwtSecret),
-		cfg.Security.JWTIssuer,
-		cfg.Security.JWTAudience,
+		"", // JWTIssuer — configure via vyx.yaml security.jwt_issuer (TODO: wire config)
+		"", // JWTAudience — configure via vyx.yaml security.jwt_audience (TODO: wire config)
 	)
 	return jwtValidator, schemaValidator
 }
