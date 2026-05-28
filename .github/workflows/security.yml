@@ -1,0 +1,148 @@
+# Security scanning workflow for VYX Framework.
+# Runs on every push and PR to detect vulnerabilities, secrets, and misconfigurations.
+name: Security
+
+on:
+  push:
+    branches: [main, 'feat/**', 'fix/**', 'sec/**']
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1' # Every Monday at 6:00 UTC
+
+jobs:
+  # ─── Go vulnerability scan ──────────────────────────────────────────────
+  govulncheck:
+    name: Go Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.10'
+          check-latest: true
+      - name: Run govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          cd core && govulncheck ./...
+
+  # ─── Node.js dependency audit ──────────────────────────────────────────
+  npm-audit:
+    name: Node.js Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: packages/worker/package-lock.json
+      - name: Install dependencies
+        run: cd packages/worker && npm ci
+      - name: Run npm audit
+        run: cd packages/worker && npm audit --audit-level=high
+        continue-on-error: true # TODO: fail on high after audit fixes
+
+  # ─── Python dependency audit ───────────────────────────────────────────
+  pip-audit:
+    name: Python Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - name: Install dependencies
+        run: cd packages/python && pip install -e .
+      - name: Run pip-audit
+        run: |
+          pip install pip-audit
+          cd packages/python && pip-audit
+        continue-on-error: true
+
+  # ─── SAST with golangci-lint ───────────────────────────────────────────
+  golangci-lint:
+    name: Go Static Analysis (golangci-lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.10'
+          check-latest: true
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          working-directory: core
+          args: --timeout=5m
+
+  # ─── SAST with semgrep ────────────────────────────────────────────────
+  semgrep:
+    name: Semgrep SAST
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run semgrep
+        uses: semgrep/semgrep-action@v1
+        with:
+          config: auto
+          severity: ERROR,WARNING
+
+  # ─── Secrets detection ────────────────────────────────────────────────
+  gitleaks:
+    name: Secrets Scan (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─── Dependency review (PR only) ──────────────────────────────────────
+  dependency-review:
+    name: Dependency Review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
+  # ─── Security-focused tests ────────────────────────────────────────────
+  security-tests:
+    name: Security Tests (Go)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.10'
+          check-latest: true
+      - name: Run security-focused tests
+        run: |
+          cd core && go test -race -count=1 -run "Test.*Auth|Test.*JWT|Test.*CB|Test.*RateLimit|Test.*Validation|Test.*CORS|Test.*Sanitiz|Test.*Method|Test.*ContentType|Test.*Redact" ./...
+      - name: Run race detector on all packages
+        run: |
+          cd core && go test -race -count=1 -short ./...
+
+  # ─── Fuzzing (short) ──────────────────────────────────────────────────
+  fuzzing:
+    name: Fuzz Parsers (30s each)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.10'
+          check-latest: true
+      - name: Fuzz framing parser
+        run: |
+          cd core && go test -fuzz=FuzzFrame -fuzztime=30s ./infrastructure/ipc/framing/ || true
+      - name: Fuzz route parser
+        run: |
+          cd core && go test -fuzz=FuzzRoute -fuzztime=30s ./domain/gateway/ || true

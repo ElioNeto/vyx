@@ -1,0 +1,78 @@
+#!/bin/sh
+. "$(dirname "$0")/_/husky.sh"
+
+# VYX Security Pre-Commit Hook
+# Runs before every commit to catch security issues early.
+
+echo "🔍 Running security pre-commit checks..."
+
+# 1. Go vet (static analysis)
+if [ -d "core" ]; then
+    echo "   ├─ go vet ./... (static analysis)"
+    cd core && go vet ./... 2>&1
+    if [ $? -ne 0 ]; then
+        echo "   ❌ go vet failed. Fix issues before committing."
+        exit 1
+    fi
+    cd ..
+fi
+
+# 2. Go build (compilation check)
+if [ -d "core" ]; then
+    echo "   ├─ go build ./... (compilation)"
+    cd core && go build ./... 2>&1
+    if [ $? -ne 0 ]; then
+        echo "   ❌ go build failed. Fix compilation errors."
+        exit 1
+    fi
+    cd ..
+fi
+
+# 3. Go vulnerability check (if available)
+if command -v govulncheck &> /dev/null; then
+    echo "   ├─ govulncheck (vulnerability scan)"
+    cd core && govulncheck ./... 2>&1
+    if [ $? -ne 0 ]; then
+        echo "   ⚠️  govulncheck found vulnerabilities. Review before committing."
+    fi
+    cd ..
+fi
+
+# 4. Check for debug artifacts
+echo "   ├─ checking for debug artifacts..."
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
+HAS_DEBUG=0
+for f in $STAGED_FILES; do
+    if [ -f "$f" ]; then
+        # Check for console.log in JS/TS
+        if echo "$f" | grep -qE '\.(js|ts|tsx)$'; then
+            if grep -n "console\.log\|console\.debug\|debugger" "$f" 2>/dev/null | grep -v "//.*console\.log" | grep -v "nocheck" > /dev/null; then
+                echo "   ⚠️  Possible debug artifact in $f"
+                grep -n "console\.log\|console\.debug\|debugger" "$f" 2>/dev/null | grep -v "//.*console\.log"
+                HAS_DEBUG=1
+            fi
+        fi
+        # Check for fmt.Println in Go
+        if echo "$f" | grep -qE '\.go$'; then
+            if grep -n "fmt\.Println\|fmt\.Printf\|fmt\.Print" "$f" 2>/dev/null | grep -v "_test.go" | grep -v "//.*fmt\.Print" | grep -v "nocheck" > /dev/null; then
+                echo "   ⚠️  Possible debug artifact in $f"
+                grep -n "fmt\.Println\|fmt\.Printf\|fmt\.Print" "$f" 2>/dev/null | grep -v "_test.go" | grep -v "//.*fmt\.Print"
+                HAS_DEBUG=1
+            fi
+        fi
+        # Check for print() in Python
+        if echo "$f" | grep -qE '\.py$'; then
+            if grep -n "^print(" "$f" 2>/dev/null | grep -v "nocheck" > /dev/null; then
+                echo "   ⚠️  Possible debug artifact in $f"
+                grep -n "^print(" "$f" 2>/dev/null
+                HAS_DEBUG=1
+            fi
+        fi
+    fi
+done
+
+if [ $HAS_DEBUG -eq 1 ]; then
+    echo "   ⚠️  Debug artifacts detected. Double-check before pushing."
+fi
+
+echo "   └─ ✅ Pre-commit checks complete."
