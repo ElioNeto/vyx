@@ -67,6 +67,7 @@ func Redact(input string) string {
 					end := strings.IndexByte(valueRest, '"')
 					if end >= 0 {
 						result = result[:valueStart+2] + strings.Repeat("*", end) + result[valueStart+2+end:]
+						idx = valueStart + 2 + end // advance past replaced value
 						continue
 					}
 				}
