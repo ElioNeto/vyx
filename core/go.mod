@@ -1,6 +1,6 @@
 module github.com/ElioNeto/vyx/core
 
-go 1.25.0
+go 1.25.9
 
 require (
 	github.com/apache/arrow/go/v18 v18.0.0-20241007013041-ab95a4d25142

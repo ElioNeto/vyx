@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ElioNeto/vyx/core/domain/worker"
+	"github.com/ElioNeto/vyx/core/infrastructure/recovery"
 )
 
 const defaultShutdownTimeout = 5 * time.Second
@@ -72,31 +73,21 @@ func (m *Manager) Spawn(ctx context.Context, w *worker.Worker) error {
 	// leak (defence in depth — the process-group kill should handle it).
 	cmd.WaitDelay = 3 * time.Second
 
+	// Set up pipeLog goroutines for stdout/stderr when a log writer exists.
+	// The context for these goroutines is created AFTER cmd.Start() succeeds
+	// and cancelled when the process exits (see wait goroutine below).
+	var (
+		outWriter  io.WriteCloser
+		errWriter  io.WriteCloser
+		outReader  io.Reader
+		errReader  io.Reader
+		cancel     context.CancelFunc
+	)
 	if m.logWriter != nil {
-		// Capture stdout/stderr through pipes so lines can be multiplexed
-		// into the TUI while still preserving the data in the ring buffer.
-		// Go exec creates an internal OS pipe and copies data to our
-		// io.Pipe writer; when the child exits, exec closes the internal
-		// pipe which causes the copy to finish, and then our io.Pipe is
-		// closed by exec's cleanup — do NOT close it here.
-		outReader, outWriter := io.Pipe()
-		errReader, errWriter := io.Pipe()
+		outReader, outWriter = io.Pipe()
+		errReader, errWriter = io.Pipe()
 		cmd.Stdout = outWriter
 		cmd.Stderr = errWriter
-
-		workerCtx, cancel := context.WithCancel(ctx)
-		workerID := w.ID
-		go m.pipeLog(workerCtx, m.logWriter, workerID, outReader)
-		go m.pipeLog(workerCtx, m.logWriter, workerID, errReader)
-
-		// Cancel the pipeLog goroutines when cmd.Wait() returns so they
-		// don't outlive the process.
-		go func() {
-			_ = cmd.Wait()
-			cancel()
-			outWriter.Close()
-			errWriter.Close()
-		}()
 	} else {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -111,14 +102,42 @@ func (m *Manager) Spawn(ctx context.Context, w *worker.Worker) error {
 		return fmt.Errorf("%w: %s", worker.ErrSpawnFailed, err.Error())
 	}
 
+	// Create cancel context for pipeLog goroutines AFTER process starts.
+	// This ensures cancel is always called on all code paths.
+	var pipeCtx context.Context
+	if m.logWriter != nil {
+		pipeCtx, cancel = context.WithCancel(ctx)
+		workerID := w.ID
+		go func() {
+			defer recovery.LogPanic(nil, "process.pipe_log_stdout", nil)
+			m.pipeLog(pipeCtx, m.logWriter, workerID, outReader)
+		}()
+		go func() {
+			defer recovery.LogPanic(nil, "process.pipe_log_stderr", nil)
+			m.pipeLog(pipeCtx, m.logWriter, workerID, errReader)
+		}()
+	}
+
 	m.mu.Lock()
 	m.processes[w.ID] = cmd
 	waitCh := make(chan struct{})
 	m.waitDone[w.ID] = waitCh
 	m.mu.Unlock()
 
+	// Wait for the process to exit, then clean up pipeLog goroutines
+	// and signal the waitCh so Stop() can complete.
 	go func() {
+		defer recovery.LogPanic(nil, "process.wait_cleanup", nil)
 		_ = cmd.Wait()
+		if cancel != nil {
+			cancel()
+		}
+		if outWriter != nil {
+			outWriter.Close()
+		}
+		if errWriter != nil {
+			errWriter.Close()
+		}
 		close(waitCh)
 	}()
 

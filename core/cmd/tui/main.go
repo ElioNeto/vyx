@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	ilog "github.com/ElioNeto/vyx/core/infrastructure/log"
+	"github.com/ElioNeto/vyx/core/infrastructure/recovery"
 )
 
 // Run launches the TUI program. It subscribes to the multiplexer and feeds
@@ -32,6 +33,7 @@ func Run(mux *ilog.Multiplexer) error {
 
 	// Forward new entries from multiplexer into the TUI.
 	go func() {
+		defer recovery.LogPanic(nil, "tui.entry_forwarder", nil)
 		for entry := range ch {
 			p.Send(entry)
 		}
@@ -39,6 +41,7 @@ func Run(mux *ilog.Multiplexer) error {
 
 	// Periodic refresh to keep the view in sync with fast log bursts.
 	go func() {
+		defer recovery.LogPanic(nil, "tui.ticker", nil)
 		ticker := time.NewTicker(200 * time.Millisecond)
 		defer ticker.Stop()
 		for range ticker.C {

@@ -1,0 +1,42 @@
+#!/bin/sh
+. "$(dirname "$0")/_/husky.sh"
+
+# VYX Security Pre-Push Hook
+# Runs before every push to catch security regressions.
+
+echo "🔒 Running security pre-push checks..."
+
+# 1. Run security-focused tests (Go)
+if [ -d "core" ]; then
+    echo "   ├─ go test -race -run \"Test.*Auth|Test.*JWT|Test.*CB|Test.*RateLimit|Test.*CORS\" ./..."
+    cd core && go test -race -count=1 -run "Test.*Auth|Test.*JWT|Test.*CB|Test.*RateLimit|Test.*CORS|Test.*Validation|Test.*Sanitiz|Test.*Method|Test.*ContentType" ./... 2>&1
+    if [ $? -ne 0 ]; then
+        echo "   ❌ Security tests failed. Fix before pushing."
+        exit 1
+    fi
+    cd ..
+fi
+
+# 2. Full race detector (short mode)
+if [ -d "core" ]; then
+    echo "   ├─ go test -race -short ./... (race detector)"
+    cd core && go test -race -count=1 -short ./... 2>&1
+    if [ $? -ne 0 ]; then
+        echo "   ❌ Race detector found issues. Fix before pushing."
+        exit 1
+    fi
+    cd ..
+fi
+
+# 3. Golangci-lint
+if command -v golangci-lint &> /dev/null && [ -d "core" ]; then
+    echo "   ├─ golangci-lint run"
+    cd core && golangci-lint run --timeout=5m 2>&1
+    if [ $? -ne 0 ]; then
+        echo "   ❌ Lint found issues. Fix before pushing."
+        exit 1
+    fi
+    cd ..
+fi
+
+echo "   └─ ✅ Pre-push checks complete. Ready to push."

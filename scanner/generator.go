@@ -50,8 +50,11 @@ func Generate(goDir, tsDir, pyDir, frontendDir, outputPath string) ([]Annotation
 		allErrs = append(allErrs, errs...)
 	}
 
-	validErrs := Validate(allRoutes)
+	validErrs, warnings := Validate(allRoutes)
 	allErrs = append(allErrs, validErrs...)
+
+	// Print warnings to stderr but do not block route_map.json generation.
+	PrintWarnings(warnings)
 
 	if len(allErrs) > 0 {
 		return allErrs, nil

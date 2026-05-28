@@ -104,6 +104,28 @@ func TestRead_TruncatedPayload(t *testing.T) {
 	}
 }
 
+func TestRead_PoolBufferTooSmall(t *testing.T) {
+	// The pool creates 4KB buffers. This test ensures that Read handles
+	// the (unlikely) case where the pooled header buffer has insufficient
+	// capacity by reading a valid frame successfully.
+	var buf bytes.Buffer
+	msg := ipc.Message{Type: ipc.TypeRequest, Payload: []byte("hello")}
+	if err := framing.Write(&buf, msg); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	got, err := framing.Read(&buf)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if got.Type != msg.Type {
+		t.Errorf("Type: want %v, got %v", msg.Type, got.Type)
+	}
+	if !bytes.Equal(got.Payload, msg.Payload) {
+		t.Errorf("Payload: want %q, got %q", msg.Payload, got.Payload)
+	}
+}
+
 func TestWriteRead_MultipleFrames(t *testing.T) {
 	var buf bytes.Buffer
 

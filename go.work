@@ -1,8 +1,11 @@
-go 1.25.0
+go 1.25.9
 
 use (
 	.
-	./core
 	./cmd/vyx
+	./core
+	./examples/dashboard/workers/go
+	./examples/ecommerce/workers/go
 	./examples/hello-world/workers/go
+	./examples/landpage/workers/go
 )

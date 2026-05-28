@@ -7,6 +7,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/ElioNeto/vyx/core/domain/ipc"
+	"github.com/ElioNeto/vyx/core/infrastructure/recovery"
 )
 
 // Receiver starts one heartbeat.Loop per live worker and keeps the set of
@@ -142,6 +143,7 @@ func (r *Receiver) launchLocked(ctx context.Context, workerID string) {
 
 	loop := New(workerID, r.transport, r.service, r.cfg, r.log)
 	go func() {
+		defer recovery.LogPanic(&recovery.ZapAdapter{Logger: r.log}, "heartbeat.launch_loop", nil)
 		defer func() {
 			r.mu.Lock()
 			delete(r.running, workerID)

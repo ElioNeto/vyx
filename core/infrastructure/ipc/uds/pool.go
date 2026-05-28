@@ -7,6 +7,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/ElioNeto/vyx/core/infrastructure/recovery"
 )
 
 // DefaultPool settings.
@@ -70,6 +72,12 @@ type Pool struct {
 
 	dialFn func(ctx context.Context, socketPath string) (net.Conn, error)
 
+	// lifecycleCtx is cancelled when Close() is called.
+	// Derived contexts are passed to replenish goroutines so that
+	// in-flight dials are cancelled immediately on pool shutdown.
+	lifecycleCtx    context.Context
+	lifecycleCancel context.CancelFunc
+
 	// reapTicker triggers idle connection reaping.
 	reapTicker *time.Ticker
 	reapDone   chan struct{}
@@ -98,10 +106,14 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 		cfg.DialTimeout = DefaultDialTimeout
 	}
 
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
+
 	p := &Pool{
-		cfg:     cfg,
-		dialFn:  defaultDial,
-		reapDone: make(chan struct{}),
+		cfg:             cfg,
+		dialFn:          defaultDial,
+		lifecycleCtx:    lifecycleCtx,
+		lifecycleCancel: lifecycleCancel,
+		reapDone:        make(chan struct{}),
 	}
 
 	// Pre-warm connections.
@@ -115,7 +127,10 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 
 	// Start idle reaper.
 	p.reapTicker = time.NewTicker(cfg.IdleTimeout / 2)
-	go p.reapLoop()
+	go func() {
+		defer recovery.LogPanic(nil, "uds_pool.reap_loop", nil)
+		p.reapLoop()
+	}()
 
 	return p, nil
 }
@@ -209,6 +224,9 @@ func (p *Pool) Release(c net.Conn) {
 // In-use connections are NOT closed (callers retain ownership until Release).
 func (p *Pool) Close() error {
 	p.closeOnce.Do(func() {
+		if p.lifecycleCancel != nil {
+			p.lifecycleCancel()
+		}
 		if p.reapTicker != nil {
 			p.reapTicker.Stop()
 		}
@@ -311,8 +329,14 @@ func (p *Pool) reap() {
 	if need > 0 && p.total+need <= p.cfg.MaxSize {
 		for range need {
 			// Fire-and-forget replenish — best effort.
+			// Uses lifecycleCtx so that in-flight dials are cancelled
+			// immediately when the pool is closed (no goroutine leak).
 			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), p.cfg.DialTimeout)
+				defer recovery.LogPanic(nil, "uds_pool.replenish", nil)
+				if p.lifecycleCtx.Err() != nil {
+					return
+				}
+				ctx, cancel := context.WithTimeout(p.lifecycleCtx, p.cfg.DialTimeout)
 				defer cancel()
 				_ = p.dialAndAdd(ctx)
 			}()

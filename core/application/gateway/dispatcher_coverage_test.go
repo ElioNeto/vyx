@@ -54,18 +54,25 @@ func TestRateLimiter_BasicCoverage(t *testing.T) {
 	limiter := apgw.NewRateLimiter(2, 2, time.Minute)
 
 	// Should allow first 2 requests per IP
-	if !limiter.AllowIP("10.0.0.1") {
+	ok1, _ := limiter.AllowIP("10.0.0.1")
+	if !ok1 {
 		t.Error("first request should be allowed")
 	}
-	if !limiter.AllowIP("10.0.0.1") {
+	ok2, _ := limiter.AllowIP("10.0.0.1")
+	if !ok2 {
 		t.Error("second request should be allowed")
 	}
-	if limiter.AllowIP("10.0.0.1") {
+	ok3, retryAfter := limiter.AllowIP("10.0.0.1")
+	if ok3 {
 		t.Error("third request should be denied")
+	}
+	if retryAfter <= 0 {
+		t.Errorf("retryAfter should be positive when denied, got %v", retryAfter)
 	}
 
 	// Different IP should be allowed
-	if !limiter.AllowIP("10.0.0.2") {
+	ok4, _ := limiter.AllowIP("10.0.0.2")
+	if !ok4 {
 		t.Error("different IP should be allowed")
 	}
 }
@@ -75,15 +82,21 @@ func TestRateLimiter_TokenCoverage(t *testing.T) {
 	limiter := apgw.NewRateLimiter(10, 1, time.Minute)
 
 	// Should allow first request with token
-	if !limiter.AllowToken("token-123") {
+	ok1, _ := limiter.AllowToken("token-123")
+	if !ok1 {
 		t.Error("first token request should be allowed")
 	}
-	if limiter.AllowToken("token-123") {
+	ok2, retryAfter := limiter.AllowToken("token-123")
+	if ok2 {
 		t.Error("second request with same token should be denied")
+	}
+	if retryAfter <= 0 {
+		t.Errorf("retryAfter should be positive when denied, got %v", retryAfter)
 	}
 
 	// Different token should be allowed
-	if !limiter.AllowToken("token-456") {
+	ok3, _ := limiter.AllowToken("token-456")
+	if !ok3 {
 		t.Error("different token should be allowed")
 	}
 }

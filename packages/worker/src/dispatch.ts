@@ -233,6 +233,8 @@ export function setupSocketHandlers(
     bufferRef.current = result.remaining;
   });
 
+  socket.setKeepAlive(true);
+
   socket.on('error', (err) =>
     console.error(`[${workerId}] socket error:`, err.message)
   );
@@ -248,18 +250,9 @@ export function setupSocketHandlers(
 }
 
 export function setupProcessHandlers(socket: net.Socket, shouldExit: boolean = true): void {
-  // Only set up keepAlive interval if we're actually exiting (not in test mode)
-  let keepAlive: ReturnType<typeof setInterval> | undefined;
-  if (shouldExit) {
-    keepAlive = setInterval(() => { }, 30_000);
-  }
-
   const shouldActuallyExit = shouldExit && !process.env.VYX_TEST_MODE;
 
   const cleanup = () => {
-    if (keepAlive) {
-      clearInterval(keepAlive);
-    }
     socket.destroy();
   };
 

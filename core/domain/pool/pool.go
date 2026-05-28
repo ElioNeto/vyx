@@ -29,8 +29,8 @@ type workerState struct {
 // Pool manages a group of worker instances for load distribution.
 type Pool struct {
 	mu          sync.RWMutex
-	workers     map[string]*workerState // workerID -> worker state
-	workerIDs   []string                // maintains insertion order for deterministic iteration
+	workers     sync.Map     // workerID -> *workerState (concurrent-safe, lock-free reads)
+	workerIDs   []string     // maintains insertion order for deterministic iteration
 	strategy    Strategy
 	counter     atomic.Int64 // for round-robin (using atomic for thread safety)
 	lastUpdated time.Time
@@ -42,7 +42,6 @@ func NewPool(strategy Strategy) *Pool {
 		strategy = RoundRobin
 	}
 	return &Pool{
-		workers:   make(map[string]*workerState),
 		workerIDs: make([]string, 0),
 		strategy:  strategy,
 	}
@@ -52,11 +51,11 @@ func NewPool(strategy Strategy) *Pool {
 func (p *Pool) AddWorker(w *worker.Worker) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.workers[w.ID] = &workerState{
+	p.workers.Store(w.ID, &workerState{
 		worker:          w,
 		activeReqs:      atomic.Int64{},
 		lastHealthCheck: time.Now(),
-	}
+	})
 	p.workerIDs = append(p.workerIDs, w.ID)
 	p.lastUpdated = time.Now()
 }
@@ -65,7 +64,7 @@ func (p *Pool) AddWorker(w *worker.Worker) {
 func (p *Pool) RemoveWorker(workerID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	delete(p.workers, workerID)
+	p.workers.Delete(workerID)
 	for i, id := range p.workerIDs {
 		if id == workerID {
 			p.workerIDs = append(p.workerIDs[:i], p.workerIDs[i+1:]...)
@@ -79,7 +78,8 @@ func (p *Pool) RemoveWorker(workerID string) {
 func (p *Pool) UpdateWorker(w *worker.Worker) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if ws, ok := p.workers[w.ID]; ok {
+	if v, ok := p.workers.Load(w.ID); ok {
+		ws := v.(*workerState)
 		ws.worker = w
 		ws.lastHealthCheck = time.Now()
 	}
@@ -90,9 +90,10 @@ func (p *Pool) UpdateWorker(w *worker.Worker) {
 func (p *Pool) GetWorkers() []*worker.Worker {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	workers := make([]*worker.Worker, 0, len(p.workers))
+	workers := make([]*worker.Worker, 0, len(p.workerIDs))
 	for _, id := range p.workerIDs {
-		if ws, ok := p.workers[id]; ok {
+		if v, ok := p.workers.Load(id); ok {
+			ws := v.(*workerState)
 			workers = append(workers, ws.worker)
 		}
 	}
@@ -105,8 +106,11 @@ func (p *Pool) HealthyWorkers() []*worker.Worker {
 	defer p.mu.RUnlock()
 	healthy := make([]*worker.Worker, 0)
 	for _, id := range p.workerIDs {
-		if ws, ok := p.workers[id]; ok && ws.worker.IsAlive() {
-			healthy = append(healthy, ws.worker)
+		if v, ok := p.workers.Load(id); ok {
+			ws := v.(*workerState)
+			if ws.worker.IsAlive() {
+				healthy = append(healthy, ws.worker)
+			}
 		}
 	}
 	return healthy
@@ -114,29 +118,26 @@ func (p *Pool) HealthyWorkers() []*worker.Worker {
 
 // GetWorkerState returns the worker and its active request count.
 func (p *Pool) GetWorkerState(workerID string) (*worker.Worker, int64, bool) {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	ws, ok := p.workers[workerID]
+	v, ok := p.workers.Load(workerID)
 	if !ok {
 		return nil, 0, false
 	}
+	ws := v.(*workerState)
 	return ws.worker, ws.activeReqs.Load(), true
 }
 
 // IncrementActiveReqs increments the active request count for a worker.
 func (p *Pool) IncrementActiveReqs(workerID string) {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	if ws, ok := p.workers[workerID]; ok {
+	if v, ok := p.workers.Load(workerID); ok {
+		ws := v.(*workerState)
 		ws.activeReqs.Add(1)
 	}
 }
 
 // DecrementActiveReqs decrements the active request count for a worker.
 func (p *Pool) DecrementActiveReqs(workerID string) {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	if ws, ok := p.workers[workerID]; ok {
+	if v, ok := p.workers.Load(workerID); ok {
+		ws := v.(*workerState)
 		ws.activeReqs.Add(-1)
 	}
 }
@@ -173,17 +174,15 @@ func (p *Pool) selectLeastLoaded(workers []*worker.Worker) *worker.Worker {
 		return nil
 	}
 
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
 	var selected *worker.Worker
 	var minReqs int64 = -1
 
 	for _, w := range workers {
-		ws, ok := p.workers[w.ID]
+		v, ok := p.workers.Load(w.ID)
 		if !ok {
 			continue
 		}
+		ws := v.(*workerState)
 		reqs := ws.activeReqs.Load()
 		if minReqs == -1 || reqs < minReqs {
 			minReqs = reqs
@@ -201,7 +200,7 @@ func (p *Pool) selectLeastLoaded(workers []*worker.Worker) *worker.Worker {
 func (p *Pool) Size() int {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return len(p.workers)
+	return len(p.workerIDs)
 }
 
 // HealthySize returns the number of healthy workers in the pool.
@@ -210,8 +209,11 @@ func (p *Pool) HealthySize() int {
 	defer p.mu.RUnlock()
 	count := 0
 	for _, id := range p.workerIDs {
-		if ws, ok := p.workers[id]; ok && ws.worker.IsAlive() {
-			count++
+		if v, ok := p.workers.Load(id); ok {
+			ws := v.(*workerState)
+			if ws.worker.IsAlive() {
+				count++
+			}
 		}
 	}
 	return count

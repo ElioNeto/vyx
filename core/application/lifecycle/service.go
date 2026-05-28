@@ -304,9 +304,7 @@ func (s *Service) RestartWorker(ctx context.Context, id string) error {
 	_ = s.repo.Save(ctx, w)
 	s.publish(ctx, worker.EventRestarting, w, "automatic restart")
 
-	_ = s.manager.Stop(ctx, id)
-
-	// Drain before stop (reuse same logic as StopWorker).
+	// Drain in-flight requests before stopping the process.
 	if s.drainer != nil {
 		shutdownTimeout := 30 * time.Second
 		if w.ShutdownTimeout > 0 {

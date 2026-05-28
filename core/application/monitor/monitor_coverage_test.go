@@ -8,6 +8,7 @@ import (
 
 	"github.com/ElioNeto/vyx/core/application/lifecycle"
 	"github.com/ElioNeto/vyx/core/domain/worker"
+	"github.com/stretchr/testify/assert"
 )
 
 // ---------------------------------------------------------------------------
@@ -223,6 +224,33 @@ func TestCheckAll_MarksStaleWorker(t *testing.T) {
 	// The exact state depends on implementation, but it should not be StateRunning
 }
 
+func TestCheckAll_SkipsZeroHeartbeat(t *testing.T) {
+	svc, repo := newTestService()
+	m := New(svc, repo)
+
+	// Worker in StateRunning but LastHeartbeat.IsZero() — should NOT be marked unhealthy.
+	// This reproduces the false-positive scenario from issue #138 where freshly spawned
+	// workers that haven't sent their first heartbeat yet were incorrectly flagged.
+	w := &worker.Worker{
+		ID:            "no-heartbeat-yet",
+		State:         worker.StateRunning,
+		LastHeartbeat: time.Time{}, // zero value — no heartbeat received yet
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	}
+	repo.Save(context.Background(), w)
+
+	m.checkAll(context.Background())
+
+	updated, _ := repo.FindByID(context.Background(), "no-heartbeat-yet")
+	if updated == nil {
+		t.Fatal("worker not found")
+	}
+	if updated.State != worker.StateRunning {
+		t.Errorf("worker with zero LastHeartbeat should remain running, got %s", updated.State)
+	}
+}
+
 func TestCheckAll_SkipsNonRunning(t *testing.T) {
 	svc, repo := newTestService()
 	m := New(svc, repo)
@@ -256,6 +284,136 @@ func TestScheduleRestart_ContextCancel(t *testing.T) {
 
 	// Should return without restarting
 	m.scheduleRestart(ctx, "w1")
+}
+
+// ---------------------------------------------------------------------------
+// Tests for addBackoffEntry / removeBackoffEntry (map size bounding)
+// ---------------------------------------------------------------------------
+
+func TestAddBackoffEntry_EvictsOldestWhenFull(t *testing.T) {
+	svc, _ := newTestService()
+	m := New(svc, newMemRepo())
+	// Set a very small limit for testing
+	backoffMapMaxSize = 3
+	t.Cleanup(func() { backoffMapMaxSize = 1000 })
+
+	m.mu.Lock()
+	m.addBackoffEntry("w1")
+	m.addBackoffEntry("w2")
+	m.addBackoffEntry("w3")
+	m.mu.Unlock()
+
+	// Map should have 3 entries
+	m.mu.Lock()
+	assert.Equal(t, 3, len(m.backoffs), "map should have 3 entries before eviction")
+	assert.Equal(t, []string{"w1", "w2", "w3"}, m.backoffOrder)
+
+	// Adding a 4th entry should evict "w1" (the oldest)
+	m.addBackoffEntry("w4")
+	m.mu.Unlock()
+
+	m.mu.Lock()
+	assert.Equal(t, 3, len(m.backoffs), "map should stay at max size after eviction")
+	_, exists := m.backoffs["w1"]
+	assert.False(t, exists, "w1 should have been evicted")
+	assert.Equal(t, 1, m.backoffs["w2"])
+	assert.Equal(t, 1, m.backoffs["w3"])
+	assert.Equal(t, 1, m.backoffs["w4"])
+	assert.Equal(t, []string{"w2", "w3", "w4"}, m.backoffOrder)
+	m.mu.Unlock()
+}
+
+func TestAddBackoffEntry_IncrementDoesNotChangeOrder(t *testing.T) {
+	svc, _ := newTestService()
+	m := New(svc, newMemRepo())
+
+	m.mu.Lock()
+	m.addBackoffEntry("w1")
+	m.addBackoffEntry("w2")
+	originalOrder := make([]string, len(m.backoffOrder))
+	copy(originalOrder, m.backoffOrder)
+
+	// Increment w1 — order should not change
+	m.addBackoffEntry("w1")
+	assert.Equal(t, 2, m.backoffs["w1"], "w1 should be incremented")
+	assert.Equal(t, originalOrder, m.backoffOrder, "order should not change on increment")
+	m.mu.Unlock()
+}
+
+func TestAddBackoffEntry_ReinsertAfterEviction(t *testing.T) {
+	svc, _ := newTestService()
+	m := New(svc, newMemRepo())
+	backoffMapMaxSize = 2
+	t.Cleanup(func() { backoffMapMaxSize = 1000 })
+
+	m.mu.Lock()
+	m.addBackoffEntry("w1") // backoffOrder: [w1]
+	m.addBackoffEntry("w2") // backoffOrder: [w1, w2]
+	m.addBackoffEntry("w3") // evicts w1, backoffOrder: [w2, w3]
+
+	// Now re-insert w1 — should be added fresh
+	m.addBackoffEntry("w1") // evicts w2, backoffOrder: [w3, w1]
+	m.mu.Unlock()
+
+	m.mu.Lock()
+	assert.Equal(t, 2, len(m.backoffs), "map should have 2 entries")
+	_, exists := m.backoffs["w2"]
+	assert.False(t, exists, "w2 should have been evicted")
+	assert.Equal(t, 1, m.backoffs["w1"], "w1 should start fresh at 1")
+	assert.Equal(t, []string{"w3", "w1"}, m.backoffOrder)
+	m.mu.Unlock()
+}
+
+func TestRemoveBackoffEntry_RemovesFromMapAndOrder(t *testing.T) {
+	svc, _ := newTestService()
+	m := New(svc, newMemRepo())
+
+	m.mu.Lock()
+	m.addBackoffEntry("w1")
+	m.addBackoffEntry("w2")
+	m.addBackoffEntry("w3")
+
+	// Remove middle entry
+	m.removeBackoffEntry("w2")
+
+	assert.Equal(t, 2, len(m.backoffs), "map should have 2 entries after removal")
+	_, exists := m.backoffs["w2"]
+	assert.False(t, exists, "w2 should be removed from map")
+	assert.Equal(t, []string{"w1", "w3"}, m.backoffOrder, "w2 should be removed from order")
+	m.mu.Unlock()
+}
+
+func TestRemoveBackoffEntry_FirstAndLast(t *testing.T) {
+	svc, _ := newTestService()
+	m := New(svc, newMemRepo())
+
+	m.mu.Lock()
+	m.addBackoffEntry("w1")
+	m.addBackoffEntry("w2")
+	m.addBackoffEntry("w3")
+
+	// Remove first
+	m.removeBackoffEntry("w1")
+	assert.Equal(t, []string{"w2", "w3"}, m.backoffOrder)
+
+	// Remove last
+	m.removeBackoffEntry("w3")
+	assert.Equal(t, []string{"w2"}, m.backoffOrder)
+
+	m.mu.Unlock()
+}
+
+func TestRemoveBackoffEntry_NonExistent(t *testing.T) {
+	svc, _ := newTestService()
+	m := New(svc, newMemRepo())
+
+	m.mu.Lock()
+	m.addBackoffEntry("w1")
+
+	// Should not panic
+	m.removeBackoffEntry("nonexistent")
+	assert.Equal(t, []string{"w1"}, m.backoffOrder)
+	m.mu.Unlock()
 }
 
 // ---------------------------------------------------------------------------

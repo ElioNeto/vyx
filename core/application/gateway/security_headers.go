@@ -10,5 +10,6 @@ func SecurityHeaders() map[string]string {
 		"Strict-Transport-Security": "max-age=63072000; includeSubDomains",
 		"Referrer-Policy":           "strict-origin-when-cross-origin",
 		"Content-Security-Policy":   "default-src 'self'",
+		"Permissions-Policy":       "geolocation=(), camera=(), microphone=(), payment=(), usb=()",
 	}
 }
