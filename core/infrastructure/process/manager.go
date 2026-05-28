@@ -67,22 +67,36 @@ func (m *Manager) Spawn(ctx context.Context, w *worker.Worker) error {
 
 	cmd := exec.Command(w.Command, w.Args...)
 
+	// Use a reasonable WaitDelay to cap pipe I/O wait time, preventing
+	// orphaned goroutines from blocking test teardown if child processes
+	// leak (defence in depth — the process-group kill should handle it).
+	cmd.WaitDelay = 3 * time.Second
+
 	if m.logWriter != nil {
 		// Capture stdout/stderr through pipes so lines can be multiplexed
 		// into the TUI while still preserving the data in the ring buffer.
+		// Go exec creates an internal OS pipe and copies data to our
+		// io.Pipe writer; when the child exits, exec closes the internal
+		// pipe which causes the copy to finish, and then our io.Pipe is
+		// closed by exec's cleanup — do NOT close it here.
 		outReader, outWriter := io.Pipe()
 		errReader, errWriter := io.Pipe()
 		cmd.Stdout = outWriter
 		cmd.Stderr = errWriter
 
-		// Fan-out: tee the output to the log writer AND stderr (so it's still
-		// visible when not running the TUI).
+		workerCtx, cancel := context.WithCancel(ctx)
 		workerID := w.ID
-		go m.pipeLog(m.logWriter, workerID, outReader)
-		go m.pipeLog(m.logWriter, workerID, errReader)
+		go m.pipeLog(workerCtx, m.logWriter, workerID, outReader)
+		go m.pipeLog(workerCtx, m.logWriter, workerID, errReader)
 
-		_ = outWriter.Close() // writer side — cmd will take over
-		_ = errWriter.Close()
+		// Cancel the pipeLog goroutines when cmd.Wait() returns so they
+		// don't outlive the process.
+		go func() {
+			_ = cmd.Wait()
+			cancel()
+			outWriter.Close()
+			errWriter.Close()
+		}()
 	} else {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -112,26 +126,59 @@ func (m *Manager) Spawn(ctx context.Context, w *worker.Worker) error {
 }
 
 // pipeLog reads from a pipe and calls the logWriter for each non-empty line.
-func (m *Manager) pipeLog(writer LogWriter, workerID string, r io.Reader) {
-	buf := make([]byte, 0, 64*1024)
-	lineStart := 0
+// It exits when the context is cancelled or the reader returns an error.
+func (m *Manager) pipeLog(ctx context.Context, writer LogWriter, workerID string, r io.Reader) {
+	const chunkSize = 64 * 1024
+	buf := make([]byte, chunkSize)
+	var partial []byte // carries over incomplete lines across reads
+
 	for {
-		n, err := r.Read(buf[lineStart:cap(buf)])
+		select {
+		case <-ctx.Done():
+			// Flush any remaining partial data.
+			if len(partial) > 0 {
+				writer(workerID, string(partial))
+			}
+			return
+		default:
+		}
+
+		n, err := r.Read(buf)
 		if n > 0 {
-			buf = buf[:lineStart+n]
-			lineStart = m.processBufferChunk(writer, workerID, buf)
-			buf = buf[:lineStart]
+			data := append(partial, buf[:n]...)
+			partial = m.processChunk(writer, workerID, data)
 		}
 		if err != nil {
-			if len(buf) > 0 {
-				line := string(buf)
-				if line != "" {
-					writer(workerID, line)
-				}
+			// Flush remaining partial data on EOF.
+			if len(partial) > 0 {
+				writer(workerID, string(partial))
 			}
 			return
 		}
 	}
+}
+
+// processChunk scans data for newlines and emits complete lines
+// to writer. It returns any trailing data that didn't end with a
+// newline so the caller can carry it over to the next read.
+func (m *Manager) processChunk(writer LogWriter, workerID string, data []byte) []byte {
+	start := 0
+	for i, b := range data {
+		if b == '\n' {
+			line := string(data[start:i])
+			if line != "" {
+				writer(workerID, line)
+			}
+			start = i + 1
+		}
+	}
+	if start < len(data) {
+		// Incomplete line — preserve for the next chunk.
+		out := make([]byte, len(data)-start)
+		copy(out, data[start:])
+		return out
+	}
+	return nil
 }
 
 func (m *Manager) processBufferChunk(writer LogWriter, workerID string, buf []byte) int {

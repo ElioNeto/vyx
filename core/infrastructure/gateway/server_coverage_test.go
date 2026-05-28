@@ -34,7 +34,7 @@ func TestNew_WithH2CEnabled(t *testing.T) {
 
 	cfg := DevConfig() // H2C enabled
 	cfg.Addr = ":0" // Use any available port
-	server := New(cfg, dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
+	server := New(cfg, dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	if server == nil {
 		t.Fatal("expected server, got nil")
@@ -66,7 +66,7 @@ func TestNew_WithTLSConfig(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.TLSCertFile = "cert.pem"
 	cfg.TLSKeyFile = "key.pem"
-	server := New(cfg, dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
+	server := New(cfg, dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	if server == nil {
 		t.Fatal("expected server, got nil")
@@ -97,7 +97,7 @@ func TestListenAndServeTLS(t *testing.T) {
 		Log:       zap.NewNop(),
 	})
 
-	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	// Verify the method exists by calling it (will fail without certs, but that's ok)
 	go func() {
@@ -128,7 +128,7 @@ func TestHandle_WebSocketUpgrade(t *testing.T) {
 		Log:       zap.NewNop(),
 	})
 
-	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	// Just verify the server is created properly
 	// WebSocket upgrade requires a real HTTP server with Hijack support
@@ -157,7 +157,7 @@ func TestHandle_RateLimitToken(t *testing.T) {
 	})
 
 	// Rate limiter with 1 token allowed
-	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 1, time.Minute), zap.NewNop())
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 1, time.Minute), zap.NewNop(), nil, nil)
 
 	// First request with token should succeed
 	req := httptest.NewRequest("GET", "/api/test", nil)
@@ -194,7 +194,7 @@ func TestHandle_NotFound(t *testing.T) {
 		Log:       zap.NewNop(),
 	})
 
-	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	req := httptest.NewRequest("GET", "/nonexistent", nil)
 	w := httptest.NewRecorder()
@@ -224,7 +224,7 @@ func TestHandle_AuthSuccess(t *testing.T) {
 		Log:       zap.NewNop(),
 	})
 
-	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	req := httptest.NewRequest("GET", "/api/test", nil)
 	req.Header.Set("Authorization", "Bearer valid-token")
@@ -256,7 +256,7 @@ func TestHandle_AuthFailure(t *testing.T) {
 		Log:       zap.NewNop(),
 	})
 
-	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	req := httptest.NewRequest("GET", "/api/test", nil)
 	req.Header.Set("Authorization", "Bearer valid-token")
@@ -280,7 +280,7 @@ func TestWriteError_Unauthorized(t *testing.T) {
 		Log:       zap.NewNop(),
 	})
 
-	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	w := httptest.NewRecorder()
 	err := dgw.ErrUnauthorized
@@ -303,7 +303,7 @@ func TestWriteError_Forbidden(t *testing.T) {
 		Log:       zap.NewNop(),
 	})
 
-	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	w := httptest.NewRecorder()
 	err := dgw.ErrForbidden
@@ -326,7 +326,7 @@ func TestWriteError_NotFound(t *testing.T) {
 		Log:       zap.NewNop(),
 	})
 
-	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	w := httptest.NewRecorder()
 	err := dgw.ErrRouteNotFound
@@ -349,7 +349,7 @@ func TestHandleDispatchError_CorrelationID(t *testing.T) {
 		Log:       zap.NewNop(),
 	})
 
-	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	// Create request with correlation ID
 	req := httptest.NewRequest("GET", "/api/test", nil)

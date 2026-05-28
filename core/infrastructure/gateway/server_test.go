@@ -43,7 +43,7 @@ func TestNew_ServerConfig(t *testing.T) {
 		IdleTimeout:  30 * time.Second,
 		MaxBodyBytes: 512,
 	}
-	server := New(cfg, dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
+	server := New(cfg, dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	if server.Addr() != ":9090" {
 		t.Errorf("Addr() = %q, want %q", server.Addr(), ":9090")
@@ -84,7 +84,7 @@ func TestShutdown(t *testing.T) {
 		Log:       zap.NewNop(),
 	})
 
-	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
@@ -238,7 +238,7 @@ func TestHandle_RateLimitIP(t *testing.T) {
 		Log:       zap.NewNop(),
 	})
 
-	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(1, 100, time.Minute), zap.NewNop())
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(1, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	// First request should succeed
 	req := httptest.NewRequest("GET", "/api/test", nil)
@@ -278,7 +278,7 @@ func TestHandle_ReadBody_LargePayload(t *testing.T) {
 
 	cfg := DefaultConfig()
 	cfg.MaxBodyBytes = 10 // Very small limit
-	server := New(cfg, dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
+	server := New(cfg, dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	largeBody := bytes.NewBuffer(make([]byte, 100))
 	req := httptest.NewRequest("POST", "/api/test", largeBody)
@@ -305,7 +305,7 @@ func TestHandle_BuildGatewayRequest(t *testing.T) {
 		Log:       zap.NewNop(),
 	})
 
-	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	// Test with query params and headers
 	req := httptest.NewRequest("GET", "/api/test?foo=bar&baz=qux", nil)
@@ -328,7 +328,7 @@ func TestWriteError_ValidationError(t *testing.T) {
 		Log:       zap.NewNop(),
 	})
 
-	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	w := httptest.NewRecorder()
 	err := &dgw.ValidationError{
@@ -360,7 +360,7 @@ func TestWriteError_UpstreamTimeout(t *testing.T) {
 		Log:       zap.NewNop(),
 	})
 
-	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	w := httptest.NewRecorder()
 	err := dgw.ErrUpstreamTimeout
@@ -383,7 +383,7 @@ func TestWriteError_PayloadTooLarge(t *testing.T) {
 		Log:       zap.NewNop(),
 	})
 
-	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	w := httptest.NewRecorder()
 	err := dgw.ErrPayloadTooLarge
@@ -406,7 +406,7 @@ func TestWriteResponse_CorrelationID(t *testing.T) {
 		Log:       zap.NewNop(),
 	})
 
-	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	w := httptest.NewRecorder()
 	resp := &dgw.GatewayResponse{

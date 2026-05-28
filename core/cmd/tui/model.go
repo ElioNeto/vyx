@@ -28,15 +28,17 @@ func (l Level) Next() Level    { return Level((int(l) + 1) % len(levelStrings)) 
 
 // Model is the Bubbletea model for the log viewer.
 type Model struct {
-	mux       *ilog.Multiplexer
-	workers   []string // known worker source tags
-	filter    string // free-text / req_id filter
-	activeKey string // which source is actively selected ("ALL" or specific worker)
-	level     Level
-	scrollTop int
-	maxLines  int
-	width     int
-	height    int
+	mux        *ilog.Multiplexer
+	workers    []string // known worker source tags
+	filter     string // free-text / req_id filter
+	activeKey  string // which source is actively selected ("ALL" or specific worker)
+	level      Level
+	scrollTop  int
+	maxLines   int
+	width      int
+	height     int
+	searchMode bool   // whether the user is typing a search filter
+	searchBuf  string // current search input buffer
 }
 
 // NewModel creates a Model from a Multiplexer instance.

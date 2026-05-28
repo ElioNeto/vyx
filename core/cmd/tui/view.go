@@ -65,6 +65,12 @@ func formatEntry(e dlog.Entry) string {
 }
 
 func (m Model) renderFooter() string {
+	// Search input mode
+	if m.searchMode {
+		prompt := styleKey.Render("/") + m.searchBuf + "█"
+		return styleFooter.MaxWidth(m.width).Render(prompt)
+	}
+
 	// Status bar
 	statusParts := []string{
 		styleKey.Render("q") + " quit",

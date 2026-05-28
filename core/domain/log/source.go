@@ -17,11 +17,11 @@ func ParseSource(workerID string) Source {
 	switch {
 	case workerID == "":
 		return SourceCore
-	case len(workerID) >= 4 && workerID[:5] == "node:":
+	case len(workerID) >= 5 && workerID[:5] == "node:":
 		return SourceNode
-	case len(workerID) >= 2 && workerID[:3] == "go:":
+	case len(workerID) >= 3 && workerID[:3] == "go:":
 		return SourceGo
-	case len(workerID) >= 6 && workerID[:7] == "python:":
+	case len(workerID) >= 7 && workerID[:7] == "python:":
 		return SourcePython
 	default:
 		return SourceGo // default to Go for unknown workers

@@ -775,7 +775,7 @@ func setupHTTPServerConfig(devMode bool) infragw.Config {
 
 // setupHTTPServer creates the HTTP server.
 func setupHTTPServer(cfg infragw.Config, dispatcher *apgw.Dispatcher, rateLimiter *apgw.RateLimiter, log *zap.Logger) *infragw.Server {
-	return infragw.New(cfg, dispatcher, rateLimiter, log)
+	return infragw.New(cfg, dispatcher, rateLimiter, log, nil, nil)
 }
 
 // setupSignalHandling creates the context with signal handling.

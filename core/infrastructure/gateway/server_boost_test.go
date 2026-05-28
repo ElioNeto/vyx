@@ -36,7 +36,7 @@ func TestListenAndServe_Boost(t *testing.T) {
 
 	cfg := DefaultConfig()
 	cfg.Addr = ":0" // Random port
-	server := New(cfg, dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
+	server := New(cfg, dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	// Start server in goroutine
 	go func() {
@@ -76,7 +76,7 @@ func TestHandle_DispatchError_Boost(t *testing.T) {
 		Log:       zap.NewNop(),
 	})
 
-	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	req := httptest.NewRequest("GET", "/api/test", nil)
 	w := httptest.NewRecorder()
@@ -101,7 +101,7 @@ func TestCheckRateLimit_Token_Boost(t *testing.T) {
 		Log:       zap.NewNop(),
 	})
 
-	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(1, 100, time.Minute), zap.NewNop())
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(1, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	// First request with token should succeed
 	req := httptest.NewRequest("GET", "/api/test", nil)

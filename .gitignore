@@ -89,6 +89,7 @@ venv/
 annotate
 cli
 /vyx
+core/vyx
 hello-world-go-worker
 .coverage
 .geminiignore
