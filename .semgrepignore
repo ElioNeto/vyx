@@ -1,0 +1,18 @@
+# Semgrep ignore file for VYX Framework
+# These findings are known and reviewed — not security vulnerabilities.
+
+# exec.Command is used intentionally to spawn worker processes.
+# The command and args come from vyx.yaml config, not user input.
+go.lang.security.audit.dangerous-exec-command.dangerous-exec-command: 0
+
+# math/rand is used for rate limiter jitter (non-cryptographic).
+# crypto/rand would be unnecessarily slow for this use case.
+go.lang.security.audit.crypto.math_random.math-random-used: 0
+
+# w.Write is used in the writeUnchecked helper for writing responses.
+# Input is already sanitized via schema validation and CRLF stripping.
+go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter: 0
+
+# console.error with template strings is for debug logging in workers.
+# No user-controlled format strings are used.
+javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring: 0

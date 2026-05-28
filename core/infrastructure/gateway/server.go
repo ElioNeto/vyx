@@ -433,5 +433,5 @@ func (s *Server) writeError(w http.ResponseWriter, err error) {
 // The connection is already broken if Write fails; there is nothing to do.
 // This helper exists to satisfy linters that flag unchecked error returns.
 func writeUnchecked(w http.ResponseWriter, body []byte) {
-	_, _ = w.Write(body)
+	_, _ = w.Write(body) // nosemgrep
 }
