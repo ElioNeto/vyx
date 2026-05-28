@@ -19,6 +19,11 @@ func TestMessageType_String(t *testing.T) {
 		{ipc.TypeWSOpen, "ws_open"},
 		{ipc.TypeWSMessage, "ws_message"},
 		{ipc.TypeWSClose, "ws_close"},
+		{ipc.TypeStreamStart, "stream_start"},
+		{ipc.TypeStreamChunk, "stream_chunk"},
+		{ipc.TypeStreamEnd, "stream_end"},
+		{ipc.TypeArrowData, "arrow_data"},
+		{ipc.TypeArrowSHM, "arrow_shm"},
 		{ipc.MessageType(0xFF), "unknown(0xff)"},
 	}
 

@@ -34,6 +34,7 @@ import (
 	dgw "github.com/ElioNeto/vyx/core/domain/gateway"
 	"github.com/ElioNeto/vyx/core/domain/circuit"
 	"github.com/ElioNeto/vyx/core/domain/ipc"
+	"github.com/ElioNeto/vyx/core/domain/pool"
 	dlog "github.com/ElioNeto/vyx/core/domain/log"
 	infracfg "github.com/ElioNeto/vyx/core/infrastructure/config"
 	infragw "github.com/ElioNeto/vyx/core/infrastructure/gateway"
@@ -584,10 +585,11 @@ func runServer(devMode, withTUI bool) {
 	transport := setupTransport(cfg, log)
 
 	repo, drainer, manager, publisher := setupCoreServices(mux.mux, log)
-	hbReceiver, service, healthMonitor := setupLifecycleServices(transport, repo, manager, publisher, drainer, log)
+	poolMgr := pool.NewManager(repo, manager)
+	hbReceiver, service, healthMonitor := setupLifecycleServices(transport, repo, manager, publisher, drainer, log, poolMgr)
 
 	jwtValidator, schemaValidator := setupValidators(cfg, log)
-	dispatcher := setupDispatcher(rm, transport, jwtValidator, schemaValidator, cfg, drainer, log)
+	dispatcher := setupDispatcher(rm, transport, jwtValidator, schemaValidator, cfg, drainer, log, poolMgr)
 
 	rateLimiter := setupRateLimiter(cfg)
 	gwCfg := setupHTTPServerConfig(devMode)
@@ -597,8 +599,7 @@ func runServer(devMode, withTUI bool) {
 
 	ctx, stop := setupSignalHandling()
 	defer stop()
-	startServices(startServicesConfig{
-		Ctx:           ctx,
+	startServices(ctx, startServicesConfig{
 		DevMode:       devMode,
 		Mux:           mux.mux,
 		Cfg:           cfg,
@@ -708,10 +709,11 @@ func setupLifecycleServices(
 	publisher *logger.EventPublisher,
 	drainer *lifecycle.WorkerDrainer,
 	log *zap.Logger,
+	poolMgr *pool.Manager,
 ) (*heartbeat.Receiver, *lifecycle.Service, *monitor.Monitor) {
 	hbCfg := heartbeat.DefaultConfig()
 	hbReceiver := heartbeat.NewReceiver(transport, repo, nil, hbCfg, log)
-	service := lifecycle.NewService(repo, manager, publisher, transport, hbReceiver, drainer, nil)
+	service := lifecycle.NewService(repo, manager, publisher, transport, hbReceiver, drainer, poolMgr)
 	hbReceiver.SetService(service)
 	healthMonitor := monitor.New(service, repo)
 	return hbReceiver, service, healthMonitor
@@ -736,6 +738,7 @@ func setupDispatcher(
 	cfg *doamincfg.Config,
 	drainer *lifecycle.WorkerDrainer,
 	log *zap.Logger,
+	poolMgr *pool.Manager,
 ) *apgw.Dispatcher {
 	return apgw.NewDispatcher(apgw.DispatcherConfig{
 		Routes:    rm,
@@ -745,6 +748,7 @@ func setupDispatcher(
 		Timeout:   cfg.Security.GlobalTimeout,
 		Log:       log,
 		Drainer:   drainer,
+		PoolMgr:   poolMgr,
 	}, circuit.Config{
 		Failures:    cfg.Security.CircuitBreaker.Failures,
 		Cooldown:    cfg.Security.CircuitBreaker.Cooldown,
@@ -780,9 +784,26 @@ func setupSignalHandling() (context.Context, context.CancelFunc) {
 	return ctx, stop
 }
 
+// startSigUsr1Handler listens for SIGUSR1 and triggers zero-downtime reload.
+// When SIGUSR1 is received, all workers are gracefully restarted without
+// dropping in-flight requests (drain before stop). #10
+func startSigUsr1Handler(log *zap.Logger, service *lifecycle.Service) {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGUSR1)
+	go func() {
+		for range sigCh {
+			log.Info("received SIGUSR1 — triggering zero-downtime worker reload")
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			if err := service.RestartAll(ctx); err != nil {
+				log.Error("SIGUSR1 reload: RestartAll failed", zap.Error(err))
+			}
+			cancel()
+		}
+	}()
+}
+
 // startServicesConfig holds parameters for startServices to reduce parameter count.
 type startServicesConfig struct {
-	Ctx           context.Context
 	DevMode       bool
 	Mux           *ilog.Multiplexer
 	Cfg           *doamincfg.Config
@@ -798,7 +819,7 @@ type startServicesConfig struct {
 }
 
 // startServices starts all background services and spawns workers.
-func startServices(cfg startServicesConfig) {
+func startServices(ctx context.Context, cfg startServicesConfig) {
 	if cfg.DevMode {
 		cfg.Log.Info("vyx core starting in DEV mode", zap.String("addr", cfg.GwCfg.Addr))
 	} else {
@@ -813,16 +834,19 @@ func startServices(cfg startServicesConfig) {
 		}()
 	}
 
+	// SIGUSR1 triggers zero-downtime reload of all workers (production) #10
+	startSigUsr1Handler(cfg.Log, cfg.Service)
+
 	if cfg.DevMode {
-		go hotReloadWatcher(cfg.Ctx, os.Getenv("VYX_CONFIG"), cfg.Cfg.Workers, cfg.Service, cfg.Log)
+		go hotReloadWatcher(ctx, os.Getenv("VYX_CONFIG"), cfg.Cfg.Workers, cfg.Service, cfg.Log)
 	}
 
-	spawnWorkers(cfg.Ctx, cfg.Cfg, cfg.Service, cfg.Transport, cfg.Log, cfg.HbReceiver)
+	spawnWorkers(ctx, cfg.Cfg, cfg.Service, cfg.Transport, cfg.Log, cfg.HbReceiver)
 
-	go cfg.HealthMonitor.Run(cfg.Ctx)
-	go cfg.CfgLoader.WatchSIGHUP(cfg.Ctx)
-	go cfg.HbSender.Run(cfg.Ctx)
-	go cfg.HbReceiver.Run(cfg.Ctx)
+	go cfg.HealthMonitor.Run(ctx)
+	go cfg.CfgLoader.WatchSIGHUP(ctx)
+	go cfg.HbSender.Run(ctx)
+	go cfg.HbReceiver.Run(ctx)
 
 	go func() {
 		var srvErr error
@@ -856,8 +880,7 @@ func spawnWorker(ctx context.Context, wcfg doamincfg.WorkerConfig, service *life
 	}
 	for i := 0; i < replicas; i++ {
 		workerID := buildWorkerID(wcfg.ID, i, replicas)
-		spawnWorkerInstance(spawnWorkerInstanceConfig{
-			Ctx:         ctx,
+		spawnWorkerInstance(ctx, spawnWorkerInstanceConfig{
 			WorkerID:    workerID,
 			Wcfg:        wcfg,
 			Service:     service,
@@ -879,7 +902,6 @@ func buildWorkerID(baseID string, index, replicas int) string {
 
 // spawnWorkerInstanceConfig holds parameters for spawnWorkerInstance.
 type spawnWorkerInstanceConfig struct {
-	Ctx         context.Context
 	WorkerID    string
 	Wcfg        doamincfg.WorkerConfig
 	Service     *lifecycle.Service
@@ -890,8 +912,8 @@ type spawnWorkerInstanceConfig struct {
 }
 
 // spawnWorkerInstance spawns a single worker instance.
-func spawnWorkerInstance(cfg spawnWorkerInstanceConfig) {
-	if err := cfg.Transport.Register(cfg.Ctx, cfg.WorkerID); err != nil {
+func spawnWorkerInstance(ctx context.Context, cfg spawnWorkerInstanceConfig) {
+	if err := cfg.Transport.Register(ctx, cfg.WorkerID); err != nil {
 		cfg.Log.Error("failed to register IPC socket for worker",
 			zap.String("worker_id", cfg.WorkerID), zap.Error(err))
 		return
@@ -900,11 +922,11 @@ func spawnWorkerInstance(cfg spawnWorkerInstanceConfig) {
 	cmd, cmdArgs := prepareWorkerCommand(cfg.Wcfg, cfg.WorkerID, cfg.SocketDir)
 	workDir := resolveWorkerDir(cfg.Wcfg, os.Getenv("VYX_CONFIG"))
 
-	spawnCtx, spawnCancel := createSpawnContext(cfg.Ctx, cfg.Wcfg.StartupTimeout)
+	spawnCtx, spawnCancel := createSpawnContext(ctx, cfg.Wcfg.StartupTimeout)
 	defer spawnCancel()
 
 	vyxDir := getVyxDir()
-	w, err := cfg.Service.SpawnWorker(cfg.Ctx, lifecycle.SpawnWorkerConfig{
+	w, err := cfg.Service.SpawnWorker(ctx, lifecycle.SpawnWorkerConfig{
 		ID:              cfg.WorkerID,
 		Command:         cmd,
 		Args:            cmdArgs,
@@ -927,7 +949,7 @@ func spawnWorkerInstance(cfg spawnWorkerInstanceConfig) {
 	)
 
 	waitForWorkerHandshake(spawnCtx, cfg.WorkerID, cfg.Transport, cfg.Service, cfg.Log)
-	startWorkerHeartbeat(cfg.Ctx, w.ID, cfg.HbReceiver, cfg.Log)
+	startWorkerHeartbeat(ctx, w.ID, cfg.HbReceiver, cfg.Log)
 }
 
 // prepareWorkerCommand prepares the command and arguments for a worker.

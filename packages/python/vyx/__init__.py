@@ -11,6 +11,7 @@ from .dispatch import (
     IPCPayload,
     WorkerResponse,
 )
+from .logger import Logger, logger
 
 __version__ = "0.1.0"
 
@@ -22,6 +23,8 @@ __all__ = [
     "Dispatcher",
     "IPCPayload",
     "WorkerResponse",
+    "Logger",
+    "logger",
     "ipc",
     "scanner",
 ]

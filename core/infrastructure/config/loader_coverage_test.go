@@ -10,14 +10,13 @@ import (
 )
 
 func TestLoader_WithRouteMap(t *testing.T) {
-	loader := infracfg.New("/tmp/test.yaml", nil)
 	// Just verify it doesn't panic
 	defer func() {
 		if r := recover(); r != nil {
 			t.Errorf("WithRouteMap panicked: %v", r)
 		}
 	}()
-	loader.WithRouteMap("/tmp/route_map.json", nil)
+	infracfg.New("/tmp/test.yaml", nil).WithRouteMap("/tmp/route_map.json", nil)
 }
 
 func TestLoader_CurrentAndLoad(t *testing.T) {
@@ -32,26 +31,20 @@ project:
 		t.Fatal(err)
 	}
 
-	loader := infracfg.New(path, nil)
-	cfg, err := loader.Load()
-	if err != nil {
+	if cfg, err := infracfg.New(path, nil).Load(); err != nil {
 		t.Fatalf("Load failed: %v", err)
-	}
-
-	// Set current manually (since SetCurrent is not exported, we verify Load works)
-	if cfg.Project.Name != "test-app" {
+	} else if cfg.Project.Name != "test-app" {
 		t.Errorf("Project.Name = %q, want %q", cfg.Project.Name, "test-app")
 	}
 }
 
 func TestLoader_MustLoad(t *testing.T) {
-	loader := infracfg.New("/nonexistent.yaml", nil)
 	defer func() {
 		if r := recover(); r == nil {
 			t.Error("MustLoad should panic on error")
 		}
 	}()
-	loader.MustLoad()
+	infracfg.New("/nonexistent.yaml", nil).MustLoad()
 }
 
 func TestLoader_LoadAndValidate(t *testing.T) {
@@ -68,17 +61,15 @@ workers:
 		t.Fatal(err)
 	}
 
-	loader := infracfg.New(path, nil)
-	cfg, err := loader.Load()
-	if err != nil {
+	if cfg, err := infracfg.New(path, nil).Load(); err != nil {
 		t.Fatalf("Load failed: %v", err)
-	}
-
-	if len(cfg.Workers) != 1 {
-		t.Fatalf("expected 1 worker, got %d", len(cfg.Workers))
-	}
-	if cfg.Workers[0].ID != "node:api" {
-		t.Errorf("Worker ID = %q, want %q", cfg.Workers[0].ID, "node:api")
+	} else {
+		if len(cfg.Workers) != 1 {
+			t.Fatalf("expected 1 worker, got %d", len(cfg.Workers))
+		}
+		if cfg.Workers[0].ID != "node:api" {
+			t.Errorf("Worker ID = %q, want %q", cfg.Workers[0].ID, "node:api")
+		}
 	}
 }
 
@@ -134,13 +125,9 @@ ipc:
 		t.Fatal(err)
 	}
 
-	loader := infracfg.New(path, nil)
-	cfg, err := loader.Load()
-	if err != nil {
+	if cfg, err := infracfg.New(path, nil).Load(); err != nil {
 		t.Fatalf("Load failed: %v", err)
-	}
-
-	if cfg.IPC.SocketDir != "/tmp/custom-vyx" {
+	} else if cfg.IPC.SocketDir != "/tmp/custom-vyx" {
 		t.Errorf("IPC.SocketDir = %q, want %q", cfg.IPC.SocketDir, "/tmp/custom-vyx")
 	}
 }
@@ -163,16 +150,14 @@ security:
 		t.Fatal(err)
 	}
 
-	loader := infracfg.New(path, nil)
-	cfg, err := loader.Load()
-	if err != nil {
+	if cfg, err := infracfg.New(path, nil).Load(); err != nil {
 		t.Fatalf("Load failed: %v", err)
-	}
-
-	if cfg.Security.JWTSecretEnv != "MY_SECRET" {
-		t.Errorf("JWTSecretEnv = %q, want %q", cfg.Security.JWTSecretEnv, "MY_SECRET")
-	}
-	if cfg.Security.GlobalTimeout != 45*time.Second {
-		t.Errorf("GlobalTimeout = %v, want 45s", cfg.Security.GlobalTimeout)
+	} else {
+		if cfg.Security.JWTSecretEnv != "MY_SECRET" {
+			t.Errorf("JWTSecretEnv = %q, want %q", cfg.Security.JWTSecretEnv, "MY_SECRET")
+		}
+		if cfg.Security.GlobalTimeout != 45*time.Second {
+			t.Errorf("GlobalTimeout = %v, want 45s", cfg.Security.GlobalTimeout)
+		}
 	}
 }

@@ -24,7 +24,7 @@ func runBuild(args []string) {
 	fmt.Printf("\u2705 route_map.json written to %s\n", *output)
 	fmt.Println("\U0001f527 Building core binary...")
 
-	if err := runCommand("go", "build", "-o", ".vyx/core", "./core/cmd/vyx"); err != nil {
+	if err := runCommand("go", "build", "-buildvcs=false", "-o", ".vyx/core", "github.com/ElioNeto/vyx/core/cmd/vyx"); err != nil {
 		fmt.Fprintf(os.Stderr, "error: go build failed: %v\n", err)
 		os.Exit(1)
 	}
