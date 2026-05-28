@@ -15,6 +15,7 @@ import (
 	apgw "github.com/ElioNeto/vyx/core/application/gateway"
 	dgw "github.com/ElioNeto/vyx/core/domain/gateway"
 	"github.com/ElioNeto/vyx/core/domain/ipc"
+	"github.com/ElioNeto/vyx/core/infrastructure/recovery"
 )
 
 // wsProxy is the WebSocket upgrade + proxying handler (#19).
@@ -155,6 +156,7 @@ func (p *wsProxy) buildHeadersSnapshot(conn *websocket.Conn) map[string]string {
 }
 
 func (p *wsProxy) pumpClientToWorker(ctx context.Context, conn *websocket.Conn, sessionID, workerID string, errCh chan<- error) {
+	defer recovery.LogPanic(&recovery.ZapAdapter{Logger: p.log}, "ws.pump_client_to_worker", nil)
 	for {
 		var data []byte
 		if err := websocket.Message.Receive(conn, &data); err != nil {
@@ -181,6 +183,7 @@ func (p *wsProxy) pumpClientToWorker(ctx context.Context, conn *websocket.Conn, 
 }
 
 func (p *wsProxy) pumpWorkerToClient(ctx context.Context, conn *websocket.Conn, sessionID, workerID string, errCh chan<- error) {
+	defer recovery.LogPanic(&recovery.ZapAdapter{Logger: p.log}, "ws.pump_worker_to_client", nil)
 	for {
 		msg, err := p.transport.ReceiveResponse(ctx, workerID)
 		if err != nil {

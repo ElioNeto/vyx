@@ -17,6 +17,7 @@ import (
 
 	"github.com/ElioNeto/vyx/core/domain/ipc"
 	"github.com/ElioNeto/vyx/core/infrastructure/ipc/framing"
+	"github.com/ElioNeto/vyx/core/infrastructure/recovery"
 	"golang.org/x/sys/windows"
 )
 
@@ -146,10 +147,12 @@ func (t *NamedPipeTransport) Register(ctx context.Context, workerID string) erro
 }
 
 func (t *NamedPipeTransport) acceptPipe(ctx context.Context, workerID string, l *namedPipeListener) {
+	defer recovery.LogPanic(nil, "named_pipe.accept_pipe", nil)
 	type result struct{ err error }
 	ch := make(chan result, 1)
 
 	go func() {
+		defer recovery.LogPanic(nil, "named_pipe.connect", nil)
 		err := windows.ConnectNamedPipe(l.handle, nil)
 		if err == windows.ERROR_PIPE_CONNECTED {
 			err = nil

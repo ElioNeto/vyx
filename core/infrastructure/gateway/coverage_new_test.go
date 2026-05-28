@@ -294,6 +294,7 @@ func TestHandle_WithBody(t *testing.T) {
 	// Create a POST request with body
 	body := strings.NewReader(`{"name": "test"}`)
 	req := httptest.NewRequest("POST", "http://example.com/api/data", body)
+	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
 	server.handle(w, req)

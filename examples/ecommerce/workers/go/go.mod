@@ -1,5 +1,5 @@
 module ecommerce-go-worker
 
-go 1.25.0
+go 1.25.10
 
-require golang.org/x/sys v0.18.0
+require golang.org/x/sys v0.45.0

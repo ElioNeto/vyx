@@ -42,6 +42,7 @@ import (
 	"github.com/ElioNeto/vyx/core/infrastructure/ipc/uds"
 	"github.com/ElioNeto/vyx/core/infrastructure/logger"
 	"github.com/ElioNeto/vyx/core/infrastructure/process"
+	"github.com/ElioNeto/vyx/core/infrastructure/recovery"
 	"github.com/ElioNeto/vyx/core/infrastructure/repository"
 	"github.com/ElioNeto/vyx/core/cmd/tui"
 	"github.com/fsnotify/fsnotify"
@@ -722,11 +723,19 @@ func setupLifecycleServices(
 // setupValidators creates JWT and schema validators.
 func setupValidators(cfg *doamincfg.Config, log *zap.Logger) (*infragw.JWTValidator, *infragw.SchemaValidator) {
 	jwtSecret := os.Getenv(cfg.Security.JWTSecretEnv)
-	if jwtSecret == "" {
-		log.Warn("JWT secret env var not set — auth will reject all tokens",
-			zap.String("env", cfg.Security.JWTSecretEnv))
+	if len(jwtSecret) < 32 {
+		log.Fatal("JWT_SECRET must be set and at least 32 bytes long",
+			zap.String("env", cfg.Security.JWTSecretEnv),
+			zap.Int("length", len(jwtSecret)),
+		)
 	}
-	return infragw.NewJWTValidator([]byte(jwtSecret)), infragw.NewSchemaValidator(cfg.Build.SchemasDir)
+	schemaValidator := infragw.NewSchemaValidator(cfg.Build.SchemasDir)
+	if err := schemaValidator.WarmUp(); err != nil {
+		log.Warn("schema warm-up: some schemas could not be pre-compiled",
+			zap.Error(err),
+		)
+	}
+	return infragw.NewJWTValidator([]byte(jwtSecret)), schemaValidator
 }
 
 // setupDispatcher creates the gateway dispatcher.
@@ -791,6 +800,7 @@ func startSigUsr1Handler(log *zap.Logger, service *lifecycle.Service) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGUSR1)
 	go func() {
+		defer recovery.LogPanic(&recovery.ZapAdapter{Logger: log}, "sigusr1_handler", nil)
 		for range sigCh {
 			log.Info("received SIGUSR1 — triggering zero-downtime worker reload")
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -828,6 +838,7 @@ func startServices(ctx context.Context, cfg startServicesConfig) {
 
 	if cfg.Mux != nil {
 		go func() {
+			defer recovery.LogPanic(&recovery.ZapAdapter{Logger: cfg.Log}, "tui", nil)
 			if err := tui.Run(cfg.Mux); err != nil {
 				cfg.Log.Error("tui exited with error", zap.Error(err))
 			}
@@ -838,17 +849,33 @@ func startServices(ctx context.Context, cfg startServicesConfig) {
 	startSigUsr1Handler(cfg.Log, cfg.Service)
 
 	if cfg.DevMode {
-		go hotReloadWatcher(ctx, os.Getenv("VYX_CONFIG"), cfg.Cfg.Workers, cfg.Service, cfg.Log)
+		go func() {
+			defer recovery.LogPanic(&recovery.ZapAdapter{Logger: cfg.Log}, "hot_reload_watcher", nil)
+			hotReloadWatcher(ctx, os.Getenv("VYX_CONFIG"), cfg.Cfg.Workers, cfg.Service, cfg.Log)
+		}()
 	}
 
 	spawnWorkers(ctx, cfg.Cfg, cfg.Service, cfg.Transport, cfg.Log, cfg.HbReceiver)
 
-	go cfg.HealthMonitor.Run(ctx)
-	go cfg.CfgLoader.WatchSIGHUP(ctx)
-	go cfg.HbSender.Run(ctx)
-	go cfg.HbReceiver.Run(ctx)
+	go func() {
+		defer recovery.LogPanic(&recovery.ZapAdapter{Logger: cfg.Log}, "health_monitor", nil)
+		cfg.HealthMonitor.Run(ctx)
+	}()
+	go func() {
+		defer recovery.LogPanic(&recovery.ZapAdapter{Logger: cfg.Log}, "config_watcher", nil)
+		cfg.CfgLoader.WatchSIGHUP(ctx)
+	}()
+	go func() {
+		defer recovery.LogPanic(&recovery.ZapAdapter{Logger: cfg.Log}, "heartbeat_sender", nil)
+		cfg.HbSender.Run(ctx)
+	}()
+	go func() {
+		defer recovery.LogPanic(&recovery.ZapAdapter{Logger: cfg.Log}, "heartbeat_receiver", nil)
+		cfg.HbReceiver.Run(ctx)
+	}()
 
 	go func() {
+		defer recovery.LogPanic(&recovery.ZapAdapter{Logger: cfg.Log}, "http_server", nil)
 		var srvErr error
 		if cfg.GwCfg.TLSCertFile != "" {
 			srvErr = cfg.HttpServer.ListenAndServeTLS(cfg.GwCfg.TLSCertFile, cfg.GwCfg.TLSKeyFile)

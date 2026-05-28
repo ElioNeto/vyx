@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -259,6 +260,9 @@ func TestHandle_RateLimitIP(t *testing.T) {
 	if w2.Code != http.StatusTooManyRequests {
 		t.Errorf("second request should be rate limited, got %d", w2.Code)
 	}
+	if w2.Header().Get("Retry-After") == "" {
+		t.Error("rate limited response should include Retry-After header")
+	}
 }
 
 // TestHandle_ReadBody_LargePayload verifies payload size limit.
@@ -282,6 +286,7 @@ func TestHandle_ReadBody_LargePayload(t *testing.T) {
 
 	largeBody := bytes.NewBuffer(make([]byte, 100))
 	req := httptest.NewRequest("POST", "/api/test", largeBody)
+	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	server.handle(w, req)
 
@@ -369,6 +374,14 @@ func TestWriteError_UpstreamTimeout(t *testing.T) {
 	if w.Code != http.StatusGatewayTimeout {
 		t.Errorf("expected 504 for timeout error, got %d", w.Code)
 	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp["error"] != "upstream timeout" {
+		t.Errorf("response error = %q, want %q", resp["error"], "upstream timeout")
+	}
 }
 
 // TestWriteError_PayloadTooLarge verifies payload too large error handling.
@@ -391,6 +404,130 @@ func TestWriteError_PayloadTooLarge(t *testing.T) {
 
 	if w.Code != http.StatusRequestEntityTooLarge {
 		t.Errorf("expected 413 for payload too large error, got %d", w.Code)
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp["error"] != "payload too large" {
+		t.Errorf("response error = %q, want %q", resp["error"], "payload too large")
+	}
+}
+
+// TestWriteError_RouteNotFound verifies sanitized 404 response.
+func TestWriteError_RouteNotFound(t *testing.T) {
+	dispatcher := apgw.NewDispatcher(apgw.DispatcherConfig{
+		Routes:    dgw.NewRouteMap(nil),
+		Transport: &mockTransportResp{},
+		JWT:       &mockJWTValid{},
+		Schema:    &mockSchemaValid{},
+		Timeout:   1 * time.Second,
+		Log:       zap.NewNop(),
+	})
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
+
+	w := httptest.NewRecorder()
+	server.writeError(w, dgw.ErrRouteNotFound)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", w.Code)
+	}
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp["error"] != "route not found" {
+		t.Errorf("response error = %q, want %q", resp["error"], "route not found")
+	}
+}
+
+// TestWriteError_Unauthorized verifies sanitized 401 response.
+func TestWriteError_Unauthorized(t *testing.T) {
+	dispatcher := apgw.NewDispatcher(apgw.DispatcherConfig{
+		Routes:    dgw.NewRouteMap(nil),
+		Transport: &mockTransportResp{},
+		JWT:       &mockJWTValid{},
+		Schema:    &mockSchemaValid{},
+		Timeout:   1 * time.Second,
+		Log:       zap.NewNop(),
+	})
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
+
+	w := httptest.NewRecorder()
+	server.writeError(w, dgw.ErrUnauthorized)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", w.Code)
+	}
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp["error"] != "unauthorized" {
+		t.Errorf("response error = %q, want %q", resp["error"], "unauthorized")
+	}
+}
+
+// TestWriteError_Forbidden verifies sanitized 403 response.
+func TestWriteError_Forbidden(t *testing.T) {
+	dispatcher := apgw.NewDispatcher(apgw.DispatcherConfig{
+		Routes:    dgw.NewRouteMap(nil),
+		Transport: &mockTransportResp{},
+		JWT:       &mockJWTValid{},
+		Schema:    &mockSchemaValid{},
+		Timeout:   1 * time.Second,
+		Log:       zap.NewNop(),
+	})
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
+
+	w := httptest.NewRecorder()
+	server.writeError(w, dgw.ErrForbidden)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("expected 403, got %d", w.Code)
+	}
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp["error"] != "forbidden" {
+		t.Errorf("response error = %q, want %q", resp["error"], "forbidden")
+	}
+}
+
+// TestWriteError_UnknownError verifies that unknown errors return a generic
+// "internal server error" message instead of leaking raw error details.
+func TestWriteError_UnknownError(t *testing.T) {
+	routes := dgw.NewRouteMap(nil)
+	dispatcher := apgw.NewDispatcher(apgw.DispatcherConfig{
+		Routes:    routes,
+		Transport: &mockTransportResp{},
+		JWT:       &mockJWTValid{},
+		Schema:    &mockSchemaValid{},
+		Timeout:   1 * time.Second,
+		Log:       zap.NewNop(),
+	})
+
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
+
+	w := httptest.NewRecorder()
+	err := errors.New("sensitive internal detail: /var/data/secret.key: permission denied")
+	server.writeError(w, err)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 for unknown error, got %d", w.Code)
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp["error"] != "internal server error" {
+		t.Errorf("response error = %q, want %q", resp["error"], "internal server error")
+	}
+	if resp["error"] == "sensitive internal detail: /var/data/secret.key: permission denied" {
+		t.Error("unknown error leaked raw error message to client")
 	}
 }
 
@@ -451,3 +588,109 @@ func (m *mockJWTValid) Validate(_ string) (*dgw.Claims, error) {
 type mockSchemaValid struct{}
 
 func (m *mockSchemaValid) Validate(_ string, _ []byte) error { return nil }
+
+// TestCheckMethod verifies that checkMethod accepts allowed methods and
+// rejects disallowed methods with 405 Method Not Allowed.
+func TestCheckMethod(t *testing.T) {
+	dispatcher := apgw.NewDispatcher(apgw.DispatcherConfig{
+		Routes:    dgw.NewRouteMap(nil),
+		Transport: &mockTransportResp{},
+		JWT:       &mockJWTValid{},
+		Schema:    &mockSchemaValid{},
+		Timeout:   1 * time.Second,
+		Log:       zap.NewNop(),
+	})
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
+
+	tests := []struct {
+		name   string
+		method string
+		status int
+	}{
+		{name: "GET is allowed", method: http.MethodGet, status: http.StatusOK},
+		{name: "POST is allowed", method: http.MethodPost, status: http.StatusOK},
+		{name: "PUT is allowed", method: http.MethodPut, status: http.StatusOK},
+		{name: "PATCH is allowed", method: http.MethodPatch, status: http.StatusOK},
+		{name: "DELETE is allowed", method: http.MethodDelete, status: http.StatusOK},
+		{name: "HEAD is allowed", method: http.MethodHead, status: http.StatusOK},
+		{name: "OPTIONS is allowed", method: http.MethodOptions, status: http.StatusOK},
+		{name: "TRACE is rejected", method: http.MethodTrace, status: http.StatusMethodNotAllowed},
+		{name: "CONNECT is rejected", method: http.MethodConnect, status: http.StatusMethodNotAllowed},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, "/api/test", nil)
+			w := httptest.NewRecorder()
+
+			// checkMethod returns true for allowed methods, false for rejected.
+			got := server.checkMethod(w, req)
+			if tt.status == http.StatusMethodNotAllowed {
+				if got {
+					t.Error("checkMethod returned true, want false")
+				}
+				if w.Code != http.StatusMethodNotAllowed {
+					t.Errorf("status = %d, want %d", w.Code, http.StatusMethodNotAllowed)
+				}
+				var resp map[string]string
+				if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+					t.Fatalf("failed to decode response: %v", err)
+				}
+				if resp["error"] != "method not allowed" {
+					t.Errorf("error = %q, want %q", resp["error"], "method not allowed")
+				}
+			} else {
+				if !got {
+					t.Error("checkMethod returned false, want true")
+				}
+			}
+		})
+	}
+}
+
+// TestMethodNotAllowedBody verifies the JSON body for 405 responses.
+func TestMethodNotAllowedBody(t *testing.T) {
+	body := methodNotAllowedBody()
+	var resp map[string]string
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatalf("failed to unmarshal body: %v", err)
+	}
+	if resp["error"] != "method not allowed" {
+		t.Errorf("error = %q, want %q", resp["error"], "method not allowed")
+	}
+}
+
+// TestHandle_MethodNotAllowed verifies that the handle function returns 405
+// for disallowed methods (e.g. TRACE) through the full handler pipeline.
+func TestHandle_MethodNotAllowed(t *testing.T) {
+	routes := dgw.NewRouteMap([]dgw.RouteEntry{
+		{Method: "GET", Path: "/api/test", WorkerID: "w1"},
+	})
+
+	dispatcher := apgw.NewDispatcher(apgw.DispatcherConfig{
+		Routes:    routes,
+		Transport: &mockTransportResp{},
+		JWT:       &mockJWTValid{},
+		Schema:    &mockSchemaValid{},
+		Timeout:   1 * time.Second,
+		Log:       zap.NewNop(),
+	})
+
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
+
+	req := httptest.NewRequest(http.MethodTrace, "/api/test", nil)
+	w := httptest.NewRecorder()
+	server.handle(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405 for TRACE request, got %d", w.Code)
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp["error"] != "method not allowed" {
+		t.Errorf("error = %q, want %q", resp["error"], "method not allowed")
+	}
+}

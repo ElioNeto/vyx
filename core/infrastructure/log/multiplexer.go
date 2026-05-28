@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ElioNeto/vyx/core/domain/log"
+	"github.com/ElioNeto/vyx/core/infrastructure/recovery"
 )
 
 // Multiplexer aggregates log entries from multiple sources into a shared ring buffer.
@@ -87,6 +88,7 @@ func (m *Multiplexer) AddSourceWithPrefix(sourceTag string, r io.Reader) func() 
 func (m *Multiplexer) scanSource(workerID string, r io.Reader, parseFn func(string, string) log.Entry) func() {
 	stopCh := make(chan struct{})
 	go func() {
+		defer recovery.LogPanic(nil, "log.scan_source", nil)
 		scanner := bufio.NewScanner(r)
 		scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
 		for {

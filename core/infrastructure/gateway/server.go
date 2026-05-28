@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
+	"mime"
 	"net/http"
+	"strconv"
 	"time"
 
 	"go.uber.org/zap"
@@ -20,6 +23,25 @@ import (
 
 const defaultMaxBodyBytes = 1 << 20 // 1 MiB
 const headerXRequestID = "X-Request-Id"
+
+const maxHeaderValueLen = 4096
+
+// sanitizeHeaderValue strips control characters (< 0x20) except tab (0x09),
+// removing \r (0x0d) and \n (0x0a) which enable HTTP response splitting,
+// and truncates values exceeding maxHeaderValueLen.
+func sanitizeHeaderValue(value string) string {
+	if len(value) > maxHeaderValueLen {
+		value = value[:maxHeaderValueLen]
+	}
+	buf := make([]byte, 0, len(value))
+	for i := range len(value) {
+		b := value[i]
+		if b == '\t' || b >= 0x20 {
+			buf = append(buf, b)
+		}
+	}
+	return string(buf)
+}
 
 // Server is the HTTP gateway supporting HTTP/1.1, HTTP/2 (TLS) and h2c (cleartext).
 type Server struct {
@@ -119,6 +141,9 @@ func New(
 		handler = h2c.NewHandler(mux, h2s)
 	}
 
+	// Apply CORS middleware (outermost wrapper).
+	handler = CORSMiddleware(DefaultCORSConfig(), handler)
+
 	s.httpServer = &http.Server{
 		Addr:         cfg.Addr,
 		Handler:      handler,
@@ -163,6 +188,65 @@ func (s *Server) Addr() string {
 	return s.httpServer.Addr
 }
 
+// contentTypeErrorBody returns a JSON error body for 415 Unsupported Media Type.
+func contentTypeErrorBody() []byte {
+	b, _ := json.Marshal(map[string]string{
+		"error": "unsupported media type, only application/json is accepted",
+	})
+	return b
+}
+
+// checkContentType validates that POST, PUT and PATCH requests have
+// Content-Type: application/json.  Returns false and writes a 415 response
+// when the media type is missing or not application/json.
+func (s *Server) checkContentType(w http.ResponseWriter, r *http.Request) bool {
+	switch r.Method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch:
+		ct := r.Header.Get("Content-Type")
+		mediaType, _, err := mime.ParseMediaType(ct)
+		if err != nil || mediaType != "application/json" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnsupportedMediaType)
+			_, _ = w.Write(contentTypeErrorBody())
+			return false
+		}
+	}
+	return true
+}
+
+// allowedMethods is the set of HTTP methods accepted by the gateway.
+// HEAD is handled automatically by Go's http.ServeMux for GET routes.
+// OPTIONS is allowed for CORS preflight (already handled by CORSMiddleware).
+var allowedMethods = map[string]bool{
+	http.MethodGet:     true,
+	http.MethodPost:    true,
+	http.MethodPut:     true,
+	http.MethodPatch:   true,
+	http.MethodDelete:  true,
+	http.MethodHead:    true,
+	http.MethodOptions: true,
+}
+
+// methodNotAllowedBody returns a JSON error body for 405 Method Not Allowed.
+func methodNotAllowedBody() []byte {
+	b, _ := json.Marshal(map[string]string{
+		"error": "method not allowed",
+	})
+	return b
+}
+
+// checkMethod validates that the request HTTP method is in the allowlist.
+// Returns false and writes a 405 JSON response when the method is not allowed.
+func (s *Server) checkMethod(w http.ResponseWriter, r *http.Request) bool {
+	if !allowedMethods[r.Method] {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_, _ = w.Write(methodNotAllowedBody())
+		return false
+	}
+	return true
+}
+
 // handle is the single entry-point handler for regular HTTP requests.
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	if isWebSocketUpgrade(r) {
@@ -170,7 +254,15 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !s.checkMethod(w, r) {
+		return
+	}
+
 	if !s.checkRateLimit(w, r) {
+		return
+	}
+
+	if !s.checkContentType(w, r) {
 		return
 	}
 
@@ -191,15 +283,31 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) checkRateLimit(w http.ResponseWriter, r *http.Request) bool {
 	clientIP := s.ipResolver.ClientIP(r)
-	if !s.rateLimiter.AllowIP(clientIP) {
-		http.Error(w, "too many requests", http.StatusTooManyRequests)
+	if ok, retryAfter := s.rateLimiter.AllowIP(clientIP); !ok {
+		secs := int(math.Ceil(retryAfter.Seconds()))
+		w.Header().Set("Retry-After", strconv.Itoa(secs))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write(rateLimitBody(secs))
 		return false
 	}
-	if !s.rateLimiter.AllowToken(r.Header.Get("Authorization")) {
-		http.Error(w, "too many requests", http.StatusTooManyRequests)
+	if ok, retryAfter := s.rateLimiter.AllowToken(r.Header.Get("Authorization")); !ok {
+		secs := int(math.Ceil(retryAfter.Seconds()))
+		w.Header().Set("Retry-After", strconv.Itoa(secs))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write(rateLimitBody(secs))
 		return false
 	}
 	return true
+}
+
+func rateLimitBody(retryAfter int) []byte {
+	b, _ := json.Marshal(map[string]any{
+		"error":       "too many requests",
+		"retry_after": retryAfter,
+	})
+	return b
 }
 
 func (s *Server) readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
@@ -216,7 +324,7 @@ func (s *Server) buildGatewayRequest(r *http.Request, body []byte) *dgw.GatewayR
 	headers := make(map[string]string, len(r.Header))
 	for k, vs := range r.Header {
 		if len(vs) > 0 {
-			headers[k] = vs[0]
+			headers[k] = sanitizeHeaderValue(vs[0])
 		}
 	}
 
@@ -249,7 +357,7 @@ func (s *Server) writeResponse(w http.ResponseWriter, resp *dgw.GatewayResponse)
 		w.Header().Set(k, v)
 	}
 	for k, v := range resp.Headers {
-		w.Header().Set(k, v)
+		w.Header().Set(k, sanitizeHeaderValue(v))
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if resp.CorrelationID != "" {
@@ -259,6 +367,17 @@ func (s *Server) writeResponse(w http.ResponseWriter, resp *dgw.GatewayResponse)
 	_, _ = w.Write(resp.Body)
 }
 
+// safeErrorMessages maps known sentinel errors to safe, user-facing messages.
+// The raw err.Error() must never be sent to clients as it may leak internal
+// implementation details (file paths, dependency errors, etc.).
+var safeErrorMessages = map[error]string{
+	dgw.ErrRouteNotFound:   "route not found",
+	dgw.ErrUnauthorized:    "unauthorized",
+	dgw.ErrForbidden:       "forbidden",
+	dgw.ErrPayloadTooLarge: "payload too large",
+	dgw.ErrUpstreamTimeout: "upstream timeout",
+}
+
 func (s *Server) writeError(w http.ResponseWriter, err error) {
 	for k, v := range apgw.SecurityHeaders() {
 		w.Header().Set(k, v)
@@ -266,13 +385,18 @@ func (s *Server) writeError(w http.ResponseWriter, err error) {
 	w.Header().Set("Content-Type", "application/json")
 
 	code := http.StatusInternalServerError
+	message := "internal server error"
+
 	switch {
 	case errors.Is(err, dgw.ErrRouteNotFound):
 		code = http.StatusNotFound
+		message = safeErrorMessages[dgw.ErrRouteNotFound]
 	case errors.Is(err, dgw.ErrUnauthorized):
 		code = http.StatusUnauthorized
+		message = safeErrorMessages[dgw.ErrUnauthorized]
 	case errors.Is(err, dgw.ErrForbidden):
 		code = http.StatusForbidden
+		message = safeErrorMessages[dgw.ErrForbidden]
 	case errors.Is(err, dgw.ErrSchemaValidation):
 		code = http.StatusBadRequest
 		var ve *dgw.ValidationError
@@ -282,13 +406,16 @@ func (s *Server) writeError(w http.ResponseWriter, err error) {
 			s.log.Warn("gateway validation error", zap.Int("status", code), zap.Error(err))
 			return
 		}
+		message = "validation failed"
 	case errors.Is(err, dgw.ErrPayloadTooLarge):
 		code = http.StatusRequestEntityTooLarge
+		message = safeErrorMessages[dgw.ErrPayloadTooLarge]
 	case errors.Is(err, dgw.ErrUpstreamTimeout):
 		code = http.StatusGatewayTimeout
+		message = safeErrorMessages[dgw.ErrUpstreamTimeout]
 	}
 
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 	s.log.Warn("gateway error", zap.Int("status", code), zap.Error(err))
 }

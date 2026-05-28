@@ -1,11 +1,13 @@
-go 1.25.0
+go 1.25.10
+
+toolchain go1.25.10
 
 use (
 	.
-	./core
 	./cmd/vyx
-	./examples/hello-world/workers/go
-	./examples/ecommerce/workers/go
-	./examples/landpage/workers/go
+	./core
 	./examples/dashboard/workers/go
+	./examples/ecommerce/workers/go
+	./examples/hello-world/workers/go
+	./examples/landpage/workers/go
 )

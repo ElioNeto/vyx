@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ElioNeto/vyx/core/domain/worker"
+	"github.com/ElioNeto/vyx/core/infrastructure/recovery"
 )
 
 const defaultShutdownTimeout = 5 * time.Second
@@ -72,6 +73,12 @@ func (m *Manager) Spawn(ctx context.Context, w *worker.Worker) error {
 	// leak (defence in depth — the process-group kill should handle it).
 	cmd.WaitDelay = 3 * time.Second
 
+	var (
+		outWriter  io.WriteCloser
+		errWriter  io.WriteCloser
+		cancel     context.CancelFunc
+		workerCtx  context.Context
+	)
 	if m.logWriter != nil {
 		// Capture stdout/stderr through pipes so lines can be multiplexed
 		// into the TUI while still preserving the data in the ring buffer.
@@ -79,23 +86,21 @@ func (m *Manager) Spawn(ctx context.Context, w *worker.Worker) error {
 		// io.Pipe writer; when the child exits, exec closes the internal
 		// pipe which causes the copy to finish, and then our io.Pipe is
 		// closed by exec's cleanup — do NOT close it here.
-		outReader, outWriter := io.Pipe()
-		errReader, errWriter := io.Pipe()
+		outReader, outW := io.Pipe()
+		errReader, errW := io.Pipe()
+		outWriter, errWriter = outW, errW
 		cmd.Stdout = outWriter
 		cmd.Stderr = errWriter
 
-		workerCtx, cancel := context.WithCancel(ctx)
+		workerCtx, cancel = context.WithCancel(ctx)
 		workerID := w.ID
-		go m.pipeLog(workerCtx, m.logWriter, workerID, outReader)
-		go m.pipeLog(workerCtx, m.logWriter, workerID, errReader)
-
-		// Cancel the pipeLog goroutines when cmd.Wait() returns so they
-		// don't outlive the process.
 		go func() {
-			_ = cmd.Wait()
-			cancel()
-			outWriter.Close()
-			errWriter.Close()
+			defer recovery.LogPanic(nil, "process.pipe_log_stdout", nil)
+			m.pipeLog(workerCtx, m.logWriter, workerID, outReader)
+		}()
+		go func() {
+			defer recovery.LogPanic(nil, "process.pipe_log_stderr", nil)
+			m.pipeLog(workerCtx, m.logWriter, workerID, errReader)
 		}()
 	} else {
 		cmd.Stdout = os.Stdout
@@ -117,8 +122,20 @@ func (m *Manager) Spawn(ctx context.Context, w *worker.Worker) error {
 	m.waitDone[w.ID] = waitCh
 	m.mu.Unlock()
 
+	// Wait for the process to exit, then clean up pipeLog goroutines
+	// and signal the waitCh so Stop() can complete.
 	go func() {
+		defer recovery.LogPanic(nil, "process.wait_cleanup", nil)
 		_ = cmd.Wait()
+		if cancel != nil {
+			cancel()
+		}
+		if outWriter != nil {
+			outWriter.Close()
+		}
+		if errWriter != nil {
+			errWriter.Close()
+		}
 		close(waitCh)
 	}()
 

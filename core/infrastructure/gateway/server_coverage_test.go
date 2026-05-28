@@ -176,6 +176,9 @@ func TestHandle_RateLimitToken(t *testing.T) {
 	if w2.Code != http.StatusTooManyRequests {
 		t.Errorf("second request with same token should be rate limited, got %d", w2.Code)
 	}
+	if w2.Header().Get("Retry-After") == "" {
+		t.Error("rate limited response should include Retry-After header")
+	}
 }
 
 // TestHandle_NotFound verifies 404 for unregistered routes

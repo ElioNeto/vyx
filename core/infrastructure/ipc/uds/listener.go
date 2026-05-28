@@ -13,6 +13,7 @@ import (
 
 	"github.com/ElioNeto/vyx/core/domain/ipc"
 	"github.com/ElioNeto/vyx/core/infrastructure/ipc/framing"
+	"github.com/ElioNeto/vyx/core/infrastructure/recovery"
 )
 
 const (
@@ -53,6 +54,7 @@ type conn struct {
 // It must be called exactly once per conn.
 func (c *conn) startPump() {
 	go func() {
+		defer recovery.LogPanic(nil, "uds.read_pump", nil)
 		for {
 			msg, err := framing.Read(c.Conn)
 			if err != nil {
@@ -154,8 +156,9 @@ func (t *Transport) Register(ctx context.Context, workerID string) error {
 }
 
 // accept blocks until the worker connects, then stores the connection and
-// starts the read pump.
+// starts the read pump. It runs in a goroutine launched by Register.
 func (t *Transport) accept(ctx context.Context, workerID string, ln net.Listener) {
+	defer recovery.LogPanic(nil, "uds.accept", nil)
 	type result struct {
 		conn net.Conn
 		err  error
@@ -163,6 +166,7 @@ func (t *Transport) accept(ctx context.Context, workerID string, ln net.Listener
 	ch := make(chan result, 1)
 
 	go func() {
+		defer recovery.LogPanic(nil, "uds.accept_dial", nil)
 		c, err := ln.Accept()
 		ch <- result{c, err}
 	}()

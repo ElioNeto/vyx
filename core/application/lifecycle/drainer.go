@@ -5,6 +5,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/ElioNeto/vyx/core/infrastructure/recovery"
 )
 
 // WorkerDrainer manages in-flight request tracking and graceful draining
@@ -69,6 +71,7 @@ func (d *WorkerDrainer) Drain(ctx context.Context, workerID string, timeout time
 
 	done := make(chan struct{})
 	go func() {
+		defer recovery.LogPanic(nil, "drainer.wait", nil)
 		wg.Wait()
 		close(done)
 	}()

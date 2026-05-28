@@ -122,6 +122,9 @@ func TestCheckRateLimit_Token_Boost(t *testing.T) {
 	if server.checkRateLimit(w2, req2) {
 		t.Error("second request with same token should be rate limited")
 	}
+	if w2.Header().Get("Retry-After") == "" {
+		t.Error("rate limited response should include Retry-After header")
+	}
 }
 
 // Mock transport that always returns error
