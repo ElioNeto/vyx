@@ -443,7 +443,7 @@ func TestWriteError_RouteNotFound(t *testing.T) {
 }
 
 // TestWriteError_Unauthorized verifies sanitized 401 response.
-func TestWriteError_Unauthorized(t *testing.T) {
+func TestWriteError_Unauthorized_Server(t *testing.T) {
 	dispatcher := apgw.NewDispatcher(apgw.DispatcherConfig{
 		Routes:    dgw.NewRouteMap(nil),
 		Transport: &mockTransportResp{},
@@ -470,7 +470,7 @@ func TestWriteError_Unauthorized(t *testing.T) {
 }
 
 // TestWriteError_Forbidden verifies sanitized 403 response.
-func TestWriteError_Forbidden(t *testing.T) {
+func TestWriteError_Forbidden_Server(t *testing.T) {
 	dispatcher := apgw.NewDispatcher(apgw.DispatcherConfig{
 		Routes:    dgw.NewRouteMap(nil),
 		Transport: &mockTransportResp{},
