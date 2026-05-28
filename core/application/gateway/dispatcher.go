@@ -14,6 +14,7 @@ import (
 	dgw "github.com/ElioNeto/vyx/core/domain/gateway"
 	"github.com/ElioNeto/vyx/core/domain/circuit"
 	"github.com/ElioNeto/vyx/core/domain/ipc"
+	dmetrics "github.com/ElioNeto/vyx/core/domain/metrics"
 	"github.com/ElioNeto/vyx/core/domain/pool"
 	"github.com/ElioNeto/vyx/core/application/lifecycle"
 )
@@ -46,6 +47,17 @@ type Dispatcher struct {
 	hooks     []RequestLifecycle
 	circuit   *circuit.Registry
 	poolMgr   *pool.Manager
+	metrics   dmetrics.Provider
+
+	// Pre-created metric instruments for fast access.
+	httpReqs      dmetrics.Counter
+	httpDuration  dmetrics.Histogram
+	httpInFlight  dmetrics.Gauge
+	workerReqs    dmetrics.Counter
+	workerDur     dmetrics.Histogram
+	workerErrs    dmetrics.Counter
+	cbState       dmetrics.Gauge
+	cbTrips       dmetrics.Counter
 }
 
 // DispatcherConfig groups the dependencies for NewDispatcher.
@@ -59,6 +71,7 @@ type DispatcherConfig struct {
 	Log       *zap.Logger
 	Drainer   *lifecycle.WorkerDrainer
 	PoolMgr   *pool.Manager
+	Metrics   dmetrics.Provider // optional; defaults to Noop
 }
 
 // NewDispatcher creates a Dispatcher wired with all required dependencies.
@@ -76,6 +89,11 @@ func NewDispatcher(cfg DispatcherConfig, opts ...interface{}) *Dispatcher {
 		}
 	}
 
+	metricsProvider := cfg.Metrics
+	if metricsProvider == nil {
+		metricsProvider = dmetrics.Noop()
+	}
+
 	onStateChange := func(sc circuit.StateChange) {
 		cfg.Log.Info("circuit breaker state change",
 			zap.String("route_id", sc.RouteID),
@@ -84,6 +102,11 @@ func NewDispatcher(cfg DispatcherConfig, opts ...interface{}) *Dispatcher {
 			zap.String("reason", sc.Reason),
 			zap.Time("time", sc.Time),
 		)
+		// Record circuit breaker trips
+		if sc.To == circuit.StateOpen {
+			metricsProvider.NewCounter(dmetrics.CircuitBreakerTrips, "Circuit breaker trips").
+				Inc(dmetrics.Labels{dmetrics.LabelWorker: sc.RouteID})
+		}
 	}
 	d := &Dispatcher{
 		routes:    cfg.Routes,
@@ -96,7 +119,9 @@ func NewDispatcher(cfg DispatcherConfig, opts ...interface{}) *Dispatcher {
 		hooks:     []RequestLifecycle{NewAccessLogLifecycle(cfg.Log)},
 		circuit:   circuit.NewRegistry(circuitConfig, onStateChange),
 		poolMgr:   cfg.PoolMgr,
+		metrics:   metricsProvider,
 	}
+	d.initMetrics()
 	for _, opt := range dispatcherOpts {
 		opt(d)
 	}
@@ -126,6 +151,66 @@ func WithLifecycleHooks(hooks ...RequestLifecycle) DispatcherOption {
 	}
 }
 
+// initMetrics pre-creates all metric instruments for fast access during dispatch.
+func (d *Dispatcher) initMetrics() {
+	d.httpReqs = d.metrics.NewCounter(dmetrics.HTTPRequestTotal, "Total HTTP requests processed")
+	d.httpDuration = d.metrics.NewHistogram(dmetrics.HTTPRequestDuration, "HTTP request duration in seconds")
+	d.httpInFlight = d.metrics.NewGauge(dmetrics.HTTPRequestInFlight, "In-flight HTTP requests")
+	d.workerReqs = d.metrics.NewCounter(dmetrics.WorkerRequestTotal, "Total requests dispatched to workers")
+	d.workerDur = d.metrics.NewHistogram(dmetrics.WorkerRequestDuration, "Worker request duration in seconds")
+	d.workerErrs = d.metrics.NewCounter(dmetrics.WorkerErrorsTotal, "Total worker errors by phase")
+	d.cbState = d.metrics.NewGauge(dmetrics.CircuitBreakerState, "Circuit breaker state per route (0=Closed, 1=Open, 2=HalfOpen)")
+	d.cbTrips = d.metrics.NewCounter(dmetrics.CircuitBreakerTrips, "Total circuit breaker trips")
+}
+
+// recordHTTPMetrics records HTTP request metrics at the end of dispatch.
+func (d *Dispatcher) recordHTTPMetrics(method, path, status string, start time.Time) {
+	labels := dmetrics.Labels{
+		dmetrics.LabelMethod: method,
+		dmetrics.LabelPath:   path,
+		dmetrics.LabelStatus: status,
+	}
+	d.httpReqs.Inc(labels)
+	d.httpDuration.Observe(time.Since(start).Seconds(), labels)
+	d.httpInFlight.Dec(dmetrics.Labels{
+		dmetrics.LabelMethod: method,
+		dmetrics.LabelPath:   path,
+	})
+}
+
+// trackWorkerDispatch records worker dispatch metrics.
+func (d *Dispatcher) trackWorkerDispatch(workerID, method string, start time.Time, err error) {
+	wLabels := dmetrics.Labels{
+		dmetrics.LabelWorker: workerID,
+		dmetrics.LabelMethod: method,
+	}
+	d.workerReqs.Inc(wLabels)
+	if err != nil {
+		d.workerErrs.Inc(dmetrics.Labels{
+			dmetrics.LabelWorker: workerID,
+			dmetrics.LabelPhase:  dmetrics.PhaseDispatch,
+		})
+	}
+	d.workerDur.Observe(time.Since(start).Seconds(), wLabels)
+}
+
+// trackCircuitBreakerState updates the circuit breaker state gauge.
+func (d *Dispatcher) trackCircuitBreakerState(routeKey string, state circuit.State) {
+	var stateVal float64
+	switch state {
+	case circuit.StateClosed:
+		stateVal = 0
+	case circuit.StateOpen:
+		stateVal = 1
+	case circuit.StateHalfOpen:
+		stateVal = 2
+	}
+	d.cbState.Set(stateVal, dmetrics.Labels{
+		dmetrics.LabelWorker: routeKey,
+		dmetrics.LabelState:  state.String(),
+	})
+}
+
 // Routes returns the route map (used by the WebSocket proxy).
 func (d *Dispatcher) Routes() *dgw.RouteMap { return d.routes }
 
@@ -145,14 +230,33 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 	lc := NewLifecycleContext(req)
 	lc.CorrelationID = correlationID
 	statusCode := 0
+	routePath := ""
+	routeMethod := req.Method
 
-	defer d.notifyListeners(lc, &statusCode, start)
+	// Track in-flight requests
+	d.httpInFlight.Inc(dmetrics.Labels{
+		dmetrics.LabelMethod: routeMethod,
+		dmetrics.LabelPath:   req.Path,
+	})
+
+	defer func() {
+		d.notifyListeners(lc, &statusCode, start)
+		// Record HTTP metrics at the end (statusCode is set by now)
+		d.recordHTTPMetrics(routeMethod, routePath, fmt.Sprintf("%d", statusCode), start)
+	}()
 
 	route, ok := d.lookupRoute(req, lc)
 	if !ok {
 		return nil, dgw.ErrRouteNotFound
 	}
 	req.Params = lc.RouteParams
+	routePath = route.Path
+
+	// Record circuit breaker state after lookup
+	routeKey := fmt.Sprintf("%s:%s", req.Method, req.Path)
+	cb := d.circuit.Get(routeKey)
+	state, _, _ := cb.Stats()
+	d.trackCircuitBreakerState(routeKey, state)
 
 	if resp, ok := d.checkCircuitBreaker(ctx, req, route, lc, &statusCode); !ok {
 		return resp, lc.Err

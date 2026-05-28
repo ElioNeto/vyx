@@ -67,7 +67,7 @@ func TestCorrelationID_WorkerEchoedID(t *testing.T) {
 		Timeout:   1 * time.Second,
 		Log:       zap.NewNop(),
 	})
-	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	clientCid := uuid.NewString()
 	req := httptest.NewRequest("GET", "/api/test", nil)
@@ -106,7 +106,7 @@ func TestCorrelationID_FallbackToRequestID(t *testing.T) {
 		Timeout:   1 * time.Second,
 		Log:       zap.NewNop(),
 	})
-	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	clientCid := uuid.NewString()
 	req := httptest.NewRequest("GET", "/api/test", nil)
@@ -144,7 +144,7 @@ func TestCorrelationID_GeneratedWhenAbsent(t *testing.T) {
 		Timeout:   1 * time.Second,
 		Log:       zap.NewNop(),
 	})
-	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	// No X-Request-Id header — dispatcher should auto-generate one.
 	req := httptest.NewRequest("GET", "/api/test", nil)
@@ -172,7 +172,7 @@ func TestCorrelationID_EchoedOnErrorPath(t *testing.T) {
 		Timeout:   1 * time.Second,
 		Log:       zap.NewNop(),
 	})
-	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop())
+	server := New(DefaultConfig(), dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), zap.NewNop(), nil, nil)
 
 	clientCid := uuid.NewString()
 	req := httptest.NewRequest("GET", "/not-found", nil)

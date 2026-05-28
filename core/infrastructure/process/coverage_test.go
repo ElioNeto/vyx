@@ -10,60 +10,56 @@ import (
 	"github.com/ElioNeto/vyx/core/domain/worker"
 )
 
-// TestProcessBufferChunk unit tests.
-func TestProcessBufferChunk_SingleLine(t *testing.T) {
+// TestProcessChunk unit tests.
+func TestProcessChunk_SingleLine(t *testing.T) {
 	var lines []string
 	writer := func(id, line string) { lines = append(lines, line) }
 	m := &Manager{}
-	buf := []byte("hello\n")
-	start := m.processBufferChunk(writer, "w", buf)
+	remain := m.processChunk(writer, "w", []byte("hello\n"))
 	if len(lines) != 1 || lines[0] != "hello" {
 		t.Fatalf("expected [hello], got %v", lines)
 	}
-	if start != 6 {
-		t.Fatalf("expected start 6, got %d", start)
+	if remain != nil {
+		t.Fatalf("expected nil remainder, got %q", string(remain))
 	}
 }
 
-func TestProcessBufferChunk_MultipleLines(t *testing.T) {
+func TestProcessChunk_MultipleLines(t *testing.T) {
 	var lines []string
 	writer := func(id, line string) { lines = append(lines, line) }
 	m := &Manager{}
-	buf := []byte("line1\nline2\nline3\n")
-	start := m.processBufferChunk(writer, "w", buf)
+	remain := m.processChunk(writer, "w", []byte("line1\nline2\nline3\n"))
 	if len(lines) != 3 {
 		t.Fatalf("expected 3 lines, got %d: %v", len(lines), lines)
 	}
-	if start != 18 {
-		t.Fatalf("expected start 18, got %d", start)
+	if remain != nil {
+		t.Fatalf("expected nil remainder, got %q", string(remain))
 	}
 }
 
-func TestProcessBufferChunk_NoNewline(t *testing.T) {
+func TestProcessChunk_NoNewline(t *testing.T) {
 	var lines []string
 	writer := func(id, line string) { lines = append(lines, line) }
 	m := &Manager{}
-	buf := []byte("partial")
-	start := m.processBufferChunk(writer, "w", buf)
+	remain := m.processChunk(writer, "w", []byte("partial"))
 	if len(lines) != 0 {
 		t.Fatalf("expected 0 lines, got %v", lines)
 	}
-	if start != 0 {
-		t.Fatalf("expected start 0, got %d", start)
+	if string(remain) != "partial" {
+		t.Fatalf("expected remainder 'partial', got %q", string(remain))
 	}
 }
 
-func TestProcessBufferChunk_EmptyLines(t *testing.T) {
+func TestProcessChunk_EmptyLines(t *testing.T) {
 	var lines []string
 	writer := func(id, line string) { lines = append(lines, line) }
 	m := &Manager{}
-	buf := []byte("\n\n")
-	start := m.processBufferChunk(writer, "w", buf)
+	remain := m.processChunk(writer, "w", []byte("\n\n"))
 	if len(lines) != 0 {
 		t.Fatalf("expected 0 lines (empty lines skipped), got %d", len(lines))
 	}
-	if start != 2 {
-		t.Fatalf("expected start 2, got %d", start)
+	if remain != nil {
+		t.Fatalf("expected nil remainder after empty lines, got %q", string(remain))
 	}
 }
 
@@ -107,10 +103,71 @@ func TestWithLogWriter(t *testing.T) {
 		t.Fatal("logWriter not set")
 	}
 	// trigger writer
-	m.pipeLog(m.logWriter, "w", bytes.NewReader([]byte("test\n")))
+	m.pipeLog(context.Background(), m.logWriter, "w", bytes.NewReader([]byte("test\n")))
 	if !called {
 		t.Fatal("writer not called")
 	}
+}
+
+func TestPipeLog_PartialLine(t *testing.T) {
+	var lines []string
+	writer := func(id, line string) { lines = append(lines, line) }
+	m := New(WithLogWriter(writer))
+
+	// Partial line without newline — should be flushed on EOF.
+	m.pipeLog(context.Background(), m.logWriter, "w", bytes.NewReader([]byte("partial line")))
+	if len(lines) != 1 || lines[0] != "partial line" {
+		t.Fatalf("expected [partial line], got %v", lines)
+	}
+}
+
+func TestPipeLog_MultipleChunks(t *testing.T) {
+	var lines []string
+	writer := func(id, line string) { lines = append(lines, line) }
+	m := New(WithLogWriter(writer))
+
+	// Two complete lines, then a partial.
+	r := bytes.NewReader([]byte("line1\nline2\ninco"))
+	m.pipeLog(context.Background(), m.logWriter, "w", r)
+
+	expected := []string{"line1", "line2", "inco"}
+	if len(lines) != len(expected) {
+		t.Fatalf("expected %v, got %v", expected, lines)
+	}
+	for i, l := range lines {
+		if l != expected[i] {
+			t.Errorf("line[%d] = %q, want %q", i, l, expected[i])
+		}
+	}
+}
+
+func TestPipeLog_EmptyLines(t *testing.T) {
+	var lines []string
+	writer := func(id, line string) { lines = append(lines, line) }
+	m := New(WithLogWriter(writer))
+
+	r := bytes.NewReader([]byte("\n\n"))
+	m.pipeLog(context.Background(), m.logWriter, "w", r)
+
+	if len(lines) != 0 {
+		t.Fatalf("expected 0 lines (empty lines skipped), got %v", lines)
+	}
+}
+
+func TestPipeLog_CancelledContext(t *testing.T) {
+	var lines []string
+	writer := func(id, line string) { lines = append(lines, line) }
+	m := New(WithLogWriter(writer))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Immediately cancelled
+
+	r := bytes.NewReader([]byte("data\n"))
+	m.pipeLog(ctx, m.logWriter, "w", r)
+
+	// With cancelled context, we may or may not read the data,
+	// but the function should return immediately.
+	_ = lines
 }
 
 func TestStop_NonExistent(t *testing.T) {
@@ -138,7 +195,7 @@ func TestSpawnAndStopWithLogWriter(t *testing.T) {
 	w := &worker.Worker{
 		ID:        "test-sleep",
 		Command:   "sleep",
-		Args:      []string{"30"},
+		Args:      []string{"2"},
 		State:     worker.StateStarting,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),

@@ -15,6 +15,7 @@ import (
 
 	apgw "github.com/ElioNeto/vyx/core/application/gateway"
 	dgw "github.com/ElioNeto/vyx/core/domain/gateway"
+	dmetrics "github.com/ElioNeto/vyx/core/domain/metrics"
 )
 
 const defaultMaxBodyBytes = 1 << 20 // 1 MiB
@@ -22,12 +23,14 @@ const headerXRequestID = "X-Request-Id"
 
 // Server is the HTTP gateway supporting HTTP/1.1, HTTP/2 (TLS) and h2c (cleartext).
 type Server struct {
-	httpServer   *http.Server
-	dispatcher   *apgw.Dispatcher
-	rateLimiter  *apgw.RateLimiter
-	wsProxy      *wsProxy
-	maxBodyBytes int64
-	log          *zap.Logger
+	httpServer    *http.Server
+	dispatcher    *apgw.Dispatcher
+	rateLimiter   *apgw.RateLimiter
+	wsProxy       *wsProxy
+	maxBodyBytes  int64
+	log           *zap.Logger
+	ipResolver    dgw.ClientIPResolver
+	metricsProv   dmetrics.Provider
 }
 
 // Config holds the HTTP server configuration.
@@ -62,18 +65,30 @@ func DevConfig() Config {
 	return cfg
 }
 
-// New creates a Server wired with a Dispatcher, RateLimiter, and WebSocket proxy.
+// New creates a Server wired with a Dispatcher, RateLimiter, WebSocket proxy,
+// and ClientIPResolver.  Pass nil for ipResolver to use the default
+// RemoteAddrResolver.  Pass nil for metricsProv to disable metrics endpoint.
 func New(
 	cfg Config,
 	dispatcher *apgw.Dispatcher,
 	rateLimiter *apgw.RateLimiter,
 	log *zap.Logger,
+	ipResolver dgw.ClientIPResolver,
+	metricsProv dmetrics.Provider,
 ) *Server {
+	if ipResolver == nil {
+		ipResolver = apgw.RemoteAddrResolver{}
+	}
+	if metricsProv == nil {
+		metricsProv = dmetrics.Noop()
+	}
 	s := &Server{
 		dispatcher:   dispatcher,
 		rateLimiter:  rateLimiter,
 		maxBodyBytes: cfg.MaxBodyBytes,
 		log:          log,
+		ipResolver:   ipResolver,
+		metricsProv:  metricsProv,
 	}
 
 	// WebSocket proxy wired from dispatcher accessors.
@@ -88,6 +103,12 @@ func New(
 	mux := http.NewServeMux()
 	// WebSocket routes are served under /ws/* (#19).
 	mux.Handle("/ws/", s.wsProxy)
+	// Metrics endpoint: GET /metrics.
+	if h := metricsProv.HTTPHandler(); h != nil {
+		if handler, ok := h.(http.Handler); ok {
+			mux.Handle("/metrics", handler)
+		}
+	}
 	mux.HandleFunc("/", s.handle)
 
 	var handler http.Handler = mux
@@ -169,7 +190,8 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) checkRateLimit(w http.ResponseWriter, r *http.Request) bool {
-	if !s.rateLimiter.AllowIP(r.RemoteAddr) {
+	clientIP := s.ipResolver.ClientIP(r)
+	if !s.rateLimiter.AllowIP(clientIP) {
 		http.Error(w, "too many requests", http.StatusTooManyRequests)
 		return false
 	}
@@ -206,11 +228,12 @@ func (s *Server) buildGatewayRequest(r *http.Request, body []byte) *dgw.GatewayR
 	}
 
 	return &dgw.GatewayRequest{
-		Method:  r.Method,
-		Path:    r.URL.Path,
-		Headers: headers,
-		Query:   queryParams,
-		Body:    body,
+		Method:   r.Method,
+		Path:     r.URL.Path,
+		Headers:  headers,
+		Query:    queryParams,
+		Body:     body,
+		ClientIP: s.ipResolver.ClientIP(r),
 	}
 }
 

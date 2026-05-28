@@ -223,7 +223,7 @@ func TestHandleFunction(t *testing.T) {
 		Log:       log,
 	})
 
-	_ = New(cfg, dispatcher, nil, log)
+	_ = New(cfg, dispatcher, nil, log, nil, nil)
 
 	// The handle function would be called by the server
 	// This test just ensures New doesn't panic
@@ -249,7 +249,7 @@ func TestNew_WithRateLimiter(t *testing.T) {
 	})
 
 	rateLimiter := apgw.NewRateLimiter(100, 50, time.Minute)
-	s := New(cfg, dispatcher, rateLimiter, log)
+	s := New(cfg, dispatcher, rateLimiter, log, nil, nil)
 	if s == nil {
 		t.Fatal("expected server, got nil")
 	}
@@ -274,7 +274,7 @@ func TestServerMethods(t *testing.T) {
 		Log:       log,
 	})
 
-	s := New(cfg, dispatcher, nil, log)
+	s := New(cfg, dispatcher, nil, log, nil, nil)
 
 	// Test Addr
 	addr := s.Addr()

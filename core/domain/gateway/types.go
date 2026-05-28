@@ -9,13 +9,14 @@ type Claims struct {
 // GatewayRequest is the normalised, transport-agnostic request passed
 // through the gateway pipeline.
 type GatewayRequest struct {
-	Method  string
-	Path    string
-	Headers map[string]string
-	Query   map[string]string // populated from URL query string (#37)
-	Params  map[string]string // populated from path parameters (#36)
-	Body    []byte
-	Claims  *Claims // nil when the route requires no auth
+	Method   string
+	Path     string
+	Headers  map[string]string
+	Query    map[string]string // populated from URL query string (#37)
+	Params   map[string]string // populated from path parameters (#36)
+	Body     []byte
+	Claims   *Claims // nil when the route requires no auth
+	ClientIP string // real client IP resolved by ClientIPResolver (#57)
 }
 
 // GatewayResponse holds the worker's reply to be sent back to the HTTP client.

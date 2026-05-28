@@ -185,7 +185,7 @@ func TestNewServer_WithTLSConfig(t *testing.T) {
 		Log:       log,
 	})
 
-	server := New(cfg, dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), log)
+	server := New(cfg, dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), log, nil, nil)
 	if server == nil {
 		t.Fatal("New() returned nil")
 	}
@@ -212,7 +212,7 @@ func TestHandle_RouteNotFound(t *testing.T) {
 		Log:       log,
 	})
 
-	server := New(cfg, dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), log)
+	server := New(cfg, dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), log, nil, nil)
 
 	// Create a test request
 	req := httptest.NewRequest("GET", "http://example.com/nonexistent", nil)
@@ -251,7 +251,7 @@ func TestHandle_WithValidRoute(t *testing.T) {
 		Log:       log,
 	})
 
-	server := New(cfg, dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), log)
+	server := New(cfg, dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), log, nil, nil)
 
 	// Create a test request
 	req := httptest.NewRequest("GET", "http://example.com/test", nil)
@@ -289,7 +289,7 @@ func TestHandle_WithBody(t *testing.T) {
 		Log:       log,
 	})
 
-	server := New(cfg, dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), log)
+	server := New(cfg, dispatcher, apgw.NewRateLimiter(100, 100, time.Minute), log, nil, nil)
 
 	// Create a POST request with body
 	body := strings.NewReader(`{"name": "test"}`)

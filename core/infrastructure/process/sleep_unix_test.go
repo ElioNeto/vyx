@@ -4,4 +4,4 @@ package process_test
 
 const sleepCmd = "sleep"
 
-var sleepArgs = []string{"30"}
+var sleepArgs = []string{"2"}
