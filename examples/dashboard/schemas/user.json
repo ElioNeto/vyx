@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["name", "email"],
+  "properties": {
+    "name": {"type": "string", "minLength": 2, "maxLength": 100},
+    "email": {"type": "string", "format": "email"},
+    "role": {"type": "string", "enum": ["user", "admin"], "default": "user"},
+    "avatar_url": {"type": "string", "maxLength": 500}
+  },
+  "additionalProperties": false
+}

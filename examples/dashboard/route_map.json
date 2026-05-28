@@ -1,0 +1,17 @@
+{
+  "routes": [
+    {"path": "/login", "method": "GET", "worker_id": "node:ssr", "auth_roles": ["guest"], "validate": "", "type": "page"},
+    {"path": "/dashboard", "method": "GET", "worker_id": "node:ssr", "auth_roles": ["user", "admin"], "validate": "", "type": "page"},
+    {"path": "/settings", "method": "GET", "worker_id": "node:ssr", "auth_roles": ["user", "admin"], "validate": "", "type": "page"},
+    {"path": "/api/auth/login", "method": "POST", "worker_id": "go:api", "auth_roles": ["guest"], "validate": "login", "type": "api"},
+    {"path": "/api/users", "method": "GET", "worker_id": "go:api", "auth_roles": ["admin"], "validate": "", "type": "api"},
+    {"path": "/api/users", "method": "POST", "worker_id": "go:api", "auth_roles": ["admin"], "validate": "user", "type": "api"},
+    {"path": "/api/users/:id", "method": "GET", "worker_id": "go:api", "auth_roles": ["admin", "user"], "validate": "", "type": "api"},
+    {"path": "/api/users/:id", "method": "PUT", "worker_id": "go:api", "auth_roles": ["admin", "user"], "validate": "user", "type": "api"},
+    {"path": "/api/users/:id/settings", "method": "GET", "worker_id": "go:api", "auth_roles": ["admin", "user"], "validate": "", "type": "api"},
+    {"path": "/api/users/:id/settings", "method": "PUT", "worker_id": "go:api", "auth_roles": ["admin", "user"], "validate": "settings", "type": "api"},
+    {"path": "/api/analytics/overview", "method": "GET", "worker_id": "python:analytics", "auth_roles": ["admin", "user"], "validate": "", "type": "api"},
+    {"path": "/api/analytics/revenue", "method": "GET", "worker_id": "python:analytics", "auth_roles": ["admin"], "validate": "", "type": "api"},
+    {"path": "/api/analytics/users/growth", "method": "GET", "worker_id": "python:analytics", "auth_roles": ["admin", "user"], "validate": "", "type": "api"}
+  ]
+}

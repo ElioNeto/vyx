@@ -1,0 +1,12 @@
+{
+  "routes": [
+    {"path": "/", "method": "GET", "worker_id": "node:ssr", "auth_roles": ["guest"], "validate": "", "type": "page"},
+    {"path": "/features", "method": "GET", "worker_id": "node:ssr", "auth_roles": ["guest"], "validate": "", "type": "page"},
+    {"path": "/pricing", "method": "GET", "worker_id": "node:ssr", "auth_roles": ["guest"], "validate": "", "type": "page"},
+    {"path": "/contact", "method": "GET", "worker_id": "node:ssr", "auth_roles": ["guest"], "validate": "", "type": "page"},
+    {"path": "/api/health", "method": "GET", "worker_id": "go:api", "auth_roles": ["guest"], "validate": "", "type": "api"},
+    {"path": "/api/contact", "method": "POST", "worker_id": "go:api", "auth_roles": ["guest"], "validate": "contact", "type": "api"},
+    {"path": "/api/newsletter", "method": "POST", "worker_id": "go:api", "auth_roles": ["guest"], "validate": "newsletter", "type": "api"},
+    {"path": "/api/newsletter/subscribers", "method": "GET", "worker_id": "go:api", "auth_roles": ["admin"], "validate": "", "type": "api"}
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "routes": [
+    {"path": "/api/products", "method": "GET", "worker_id": "go:api", "auth_roles": ["guest", "user", "admin"], "validate": "", "type": "api"},
+    {"path": "/api/products", "method": "POST", "worker_id": "go:api", "auth_roles": ["admin"], "validate": "product", "type": "api"},
+    {"path": "/api/products/:id", "method": "GET", "worker_id": "go:api", "auth_roles": ["guest", "user", "admin"], "validate": "", "type": "api"},
+    {"path": "/api/products/:id", "method": "PUT", "worker_id": "go:api", "auth_roles": ["admin"], "validate": "product", "type": "api"},
+    {"path": "/api/products/:id", "method": "DELETE", "worker_id": "go:api", "auth_roles": ["admin"], "validate": "", "type": "api"},
+    {"path": "/api/cart", "method": "GET", "worker_id": "go:api", "auth_roles": ["user", "admin"], "validate": "", "type": "api"},
+    {"path": "/api/cart/items", "method": "POST", "worker_id": "go:api", "auth_roles": ["user", "admin"], "validate": "cart-item", "type": "api"},
+    {"path": "/api/orders", "method": "GET", "worker_id": "node:checkout", "auth_roles": ["user", "admin"], "validate": "", "type": "api"},
+    {"path": "/api/orders/:id", "method": "GET", "worker_id": "node:checkout", "auth_roles": ["user", "admin"], "validate": "", "type": "api"},
+    {"path": "/api/checkout", "method": "POST", "worker_id": "node:checkout", "auth_roles": ["user", "admin"], "validate": "checkout", "type": "api"},
+    {"path": "/api/payments/process", "method": "POST", "worker_id": "python:payments", "auth_roles": ["user", "admin"], "validate": "", "type": "api"},
+    {"path": "/api/payments/:id", "method": "GET", "worker_id": "python:payments", "auth_roles": ["user", "admin"], "validate": "", "type": "api"}
+  ]
+}

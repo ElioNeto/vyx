@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["name", "email", "message"],
+  "properties": {
+    "name": {"type": "string", "minLength": 2, "maxLength": 100},
+    "email": {"type": "string", "format": "email", "maxLength": 200},
+    "message": {"type": "string", "minLength": 10, "maxLength": 2000},
+    "subject": {"type": "string", "enum": ["general", "support", "sales", "partnership"], "default": "general"}
+  },
+  "additionalProperties": false
+}
