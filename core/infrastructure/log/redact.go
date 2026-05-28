@@ -42,14 +42,34 @@ func Redact(input string) string {
 			}
 			pos += idx
 
-			// Check what follows the field name: = or :
+			// Handle both "field=value" and "field":"value" (JSON) formats.
 			valueStart := pos + len(field)
 			if valueStart >= len(result) {
 				break
 			}
-			if result[valueStart] == '=' || result[valueStart] == ':' {
+			sep := result[valueStart]
+
+			// Skip JSON quote after field name: "field":"value" → look for : after "
+			if sep == '"' {
+				valueStart++
+				if valueStart >= len(result) {
+					break
+				}
+				sep = result[valueStart]
+			}
+
+			if sep == '=' || sep == ':' {
 				// Get the value after the separator
 				valueRest := result[valueStart+1:]
+				// For JSON, skip opening quote: "field":"value" → value is value"
+				if len(valueRest) > 0 && valueRest[0] == '"' {
+					valueRest = valueRest[1:]
+					end := strings.IndexByte(valueRest, '"')
+					if end >= 0 {
+						result = result[:valueStart+2] + strings.Repeat("*", end) + result[valueStart+2+end:]
+						continue
+					}
+				}
 				// Find end of value (separator or end of string)
 				end := strings.IndexAny(valueRest, " ,}\n\t&")
 				if end < 0 {
