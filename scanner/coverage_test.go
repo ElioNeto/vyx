@@ -221,6 +221,7 @@ func TestGenerate_WithAllDirs(t *testing.T) {
 		t.Fatal(err)
 	}
 	goSrc := `// @Route(GET /api/go)
+// @Auth(roles: ["admin"])
 func goHandler() {}
 `
 	if err := os.WriteFile(filepath.Join(goDir, "handler.go"), []byte(goSrc), 0644); err != nil {
@@ -233,6 +234,8 @@ func goHandler() {}
 		t.Fatal(err)
 	}
 	tsSrc := `// @Route(POST /api/ts)
+// @Auth(roles: ["admin"])
+// @Validate(JsonSchema: "test")
 function tsHandler() {}
 `
 	if err := os.WriteFile(filepath.Join(tsDir, "handler.ts"), []byte(tsSrc), 0644); err != nil {
@@ -245,6 +248,7 @@ function tsHandler() {}
 		t.Fatal(err)
 	}
 	pySrc := `# @Route(GET /api/py)
+# @Auth(roles: ["admin"])
 def pyHandler():
     pass
 `

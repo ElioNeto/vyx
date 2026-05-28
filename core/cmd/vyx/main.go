@@ -735,7 +735,12 @@ func setupValidators(cfg *doamincfg.Config, log *zap.Logger) (*infragw.JWTValida
 			zap.Error(err),
 		)
 	}
-	return infragw.NewJWTValidator([]byte(jwtSecret)), schemaValidator
+	jwtValidator := infragw.NewJWTValidatorWithClaims(
+		[]byte(jwtSecret),
+		cfg.Security.JWTIssuer,
+		cfg.Security.JWTAudience,
+	)
+	return jwtValidator, schemaValidator
 }
 
 // setupDispatcher creates the gateway dispatcher.

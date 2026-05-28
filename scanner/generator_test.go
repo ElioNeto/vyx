@@ -35,6 +35,7 @@ def create_order(data: OrderInput):
 	}
 
 	goSrc := `// @Route(GET /api/health)
+// @Auth(roles: ["admin"])
 func health() {}
 `
 	if err := os.WriteFile(filepath.Join(goDir, "health.go"), []byte(goSrc), 0644); err != nil {
@@ -83,6 +84,7 @@ func TestGenerate_WriteFileSuccess(t *testing.T) {
 	}
 
 	goSrc := `// @Route(GET /api/health)
+// @Auth(roles: ["admin"])
 func health() {}
 `
 	if err := os.WriteFile(filepath.Join(goDir, "health.go"), []byte(goSrc), 0644); err != nil {
@@ -113,6 +115,7 @@ func TestGenerate_JsonMarshalSuccess(t *testing.T) {
 	}
 
 	goSrc := `// @Route(GET /api/test)
+// @Auth(roles: ["admin"])
 func handler() {}
 `
 	if err := os.WriteFile(filepath.Join(goDir, "test.go"), []byte(goSrc), 0644); err != nil {
@@ -147,6 +150,7 @@ func TestGenerate_NestedOutputDir(t *testing.T) {
 	}
 
 	goSrc := `// @Route(GET /api/health)
+// @Auth(roles: ["admin"])
 func health() {}
 `
 	if err := os.WriteFile(filepath.Join(goDir, "health.go"), []byte(goSrc), 0644); err != nil {
@@ -212,6 +216,7 @@ func testHandler() {}
 
 // @Route(POST /api/data)
 // @Validate(JsonSchema: "DataSchema")
+// @Auth(roles: ["admin"])
 func dataHandler() {}
 `
 	if err := os.WriteFile(filepath.Join(goDir, "test.go"), []byte(goSrc), 0644); err != nil {

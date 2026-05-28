@@ -1,12 +1,15 @@
 package scanner
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestValidate_InvalidMethod(t *testing.T) {
 	routes := []Route{
-		{Path: "/api/test", Method: "INVALID", File: "handler.go", Line: 10},
+		{Path: "/api/test", Method: "INVALID", File: "handler.go", Line: 10, AuthRoles: []string{"admin"}},
 	}
-	errs := Validate(routes)
+	errs, _ := Validate(routes)
 	if len(errs) != 1 {
 		t.Fatalf("expected 1 error, got %d", len(errs))
 	}
@@ -20,9 +23,9 @@ func TestValidate_InvalidMethod(t *testing.T) {
 
 func TestValidate_PathMissingSlash(t *testing.T) {
 	routes := []Route{
-		{Path: "api/missing-slash", Method: "GET", File: "routes.ts", Line: 42},
+		{Path: "api/missing-slash", Method: "GET", File: "routes.ts", Line: 42, AuthRoles: []string{"admin"}},
 	}
-	errs := Validate(routes)
+	errs, _ := Validate(routes)
 	if len(errs) != 1 {
 		t.Fatalf("expected 1 error, got %d", len(errs))
 	}
@@ -36,10 +39,10 @@ func TestValidate_PathMissingSlash(t *testing.T) {
 
 func TestValidate_DuplicateRoute(t *testing.T) {
 	routes := []Route{
-		{Path: "/api/users", Method: "GET", File: "users.go", Line: 5},
-		{Path: "/api/users", Method: "GET", File: "users.go", Line: 20},
+		{Path: "/api/users", Method: "GET", File: "users.go", Line: 5, AuthRoles: []string{"admin"}},
+		{Path: "/api/users", Method: "GET", File: "users.go", Line: 20, AuthRoles: []string{"admin"}},
 	}
-	errs := Validate(routes)
+	errs, _ := Validate(routes)
 	if len(errs) != 1 {
 		t.Fatalf("expected 1 error, got %d", len(errs))
 	}
@@ -53,10 +56,10 @@ func TestValidate_DuplicateRoute(t *testing.T) {
 
 func TestValidate_ValidRoutes_NoErrors(t *testing.T) {
 	routes := []Route{
-		{Path: "/api/products", Method: "GET", File: "products.go", Line: 8},
-		{Path: "/api/products", Method: "POST", File: "products.go", Line: 15},
+		{Path: "/api/products", Method: "GET", File: "products.go", Line: 8, AuthRoles: []string{"admin"}},
+		{Path: "/api/products", Method: "POST", File: "products.go", Line: 15, AuthRoles: []string{"admin"}, Validate: "ProductSchema"},
 	}
-	errs := Validate(routes)
+	errs, _ := Validate(routes)
 	if len(errs) != 0 {
 		t.Errorf("expected no errors, got %v", errs)
 	}
@@ -64,9 +67,9 @@ func TestValidate_ValidRoutes_NoErrors(t *testing.T) {
 
 func TestValidate_ErrorMessage_ContainsLocation(t *testing.T) {
 	routes := []Route{
-		{Path: "/api/test", Method: "BOGUS", File: "svc.go", Line: 7},
+		{Path: "/api/test", Method: "BOGUS", File: "svc.go", Line: 7, AuthRoles: []string{"admin"}},
 	}
-	errs := Validate(routes)
+	errs, _ := Validate(routes)
 	if len(errs) == 0 {
 		t.Fatal("expected an error")
 	}
@@ -74,5 +77,117 @@ func TestValidate_ErrorMessage_ContainsLocation(t *testing.T) {
 	expected := "svc.go:7:"
 	if len(msg) < len(expected) || msg[:len(expected)] != expected {
 		t.Errorf("expected error to start with %q, got %q", expected, msg)
+	}
+}
+
+// --- New semantic validation tests ---
+
+func TestValidate_MissingValidateOnPost(t *testing.T) {
+	routes := []Route{
+		{Path: "/api/users", Method: "POST", File: "handler.go", Line: 5, AuthRoles: []string{"admin"}},
+	}
+	errs, _ := Validate(routes)
+	if len(errs) != 1 {
+		t.Fatalf("expected 1 error, got %d", len(errs))
+	}
+	if !strings.Contains(errs[0].Message, "@Validate") {
+		t.Errorf("expected error to mention @Validate, got: %s", errs[0].Message)
+	}
+}
+
+func TestValidate_MissingValidateOnPut(t *testing.T) {
+	routes := []Route{
+		{Path: "/api/users/:id", Method: "PUT", File: "handler.go", Line: 10, AuthRoles: []string{"admin"}},
+	}
+	errs, _ := Validate(routes)
+	if len(errs) != 1 {
+		t.Fatalf("expected 1 error, got %d", len(errs))
+	}
+	if !strings.Contains(errs[0].Message, "@Validate") {
+		t.Errorf("expected error to mention @Validate, got: %s", errs[0].Message)
+	}
+}
+
+func TestValidate_MissingValidateOnPatch(t *testing.T) {
+	routes := []Route{
+		{Path: "/api/users/:id", Method: "PATCH", File: "handler.go", Line: 15, AuthRoles: []string{"admin"}},
+	}
+	errs, _ := Validate(routes)
+	if len(errs) != 1 {
+		t.Fatalf("expected 1 error, got %d", len(errs))
+	}
+	if !strings.Contains(errs[0].Message, "@Validate") {
+		t.Errorf("expected error to mention @Validate, got: %s", errs[0].Message)
+	}
+}
+
+func TestValidate_ValidateOnGetOk(t *testing.T) {
+	// GET routes are not required to have @Validate.
+	routes := []Route{
+		{Path: "/api/users", Method: "GET", File: "handler.go", Line: 20, AuthRoles: []string{"admin"}},
+	}
+	errs, _ := Validate(routes)
+	if len(errs) != 0 {
+		t.Errorf("expected no errors for GET without @Validate, got %d: %v", len(errs), errs)
+	}
+}
+
+func TestValidate_ValidateOnDeleteOk(t *testing.T) {
+	// DELETE routes are not required to have @Validate.
+	routes := []Route{
+		{Path: "/api/users/:id", Method: "DELETE", File: "handler.go", Line: 25, AuthRoles: []string{"admin"}},
+	}
+	errs, _ := Validate(routes)
+	if len(errs) != 0 {
+		t.Errorf("expected no errors for DELETE without @Validate, got %d: %v", len(errs), errs)
+	}
+}
+
+func TestValidate_MissingAuthRoles(t *testing.T) {
+	routes := []Route{
+		{Path: "/api/users", Method: "GET", File: "handler.go", Line: 30},
+	}
+	errs, _ := Validate(routes)
+	if len(errs) != 1 {
+		t.Fatalf("expected 1 error, got %d", len(errs))
+	}
+	if !strings.Contains(errs[0].Message, "@Auth") {
+		t.Errorf("expected error to mention @Auth, got: %s", errs[0].Message)
+	}
+}
+
+func TestValidate_PageRouteNoAuthRequired(t *testing.T) {
+	// Page routes are exempt from @Auth requirement.
+	routes := []Route{
+		{Path: "/dashboard", Method: "GET", Type: "page", File: "pages.tsx", Line: 5},
+	}
+	errs, _ := Validate(routes)
+	if len(errs) != 0 {
+		t.Errorf("expected no errors for page route without @Auth, got %d: %v", len(errs), errs)
+	}
+}
+
+func TestValidate_MultipleErrors(t *testing.T) {
+	// POST route without @Validate and without @Auth should produce two errors.
+	routes := []Route{
+		{Path: "/api/users", Method: "POST", File: "handler.go", Line: 35},
+	}
+	errs, _ := Validate(routes)
+	if len(errs) != 2 {
+		t.Fatalf("expected 2 errors, got %d: %v", len(errs), errs)
+	}
+}
+
+func TestValidate_ValidRoutesWithAnnotations(t *testing.T) {
+	routes := []Route{
+		{Path: "/api/users", Method: "GET", File: "users.go", Line: 5, AuthRoles: []string{"admin"}},
+		{Path: "/api/users", Method: "POST", File: "users.go", Line: 10, AuthRoles: []string{"admin"}, Validate: "CreateUserSchema"},
+		{Path: "/api/users/:id", Method: "PUT", File: "users.go", Line: 15, AuthRoles: []string{"admin"}, Validate: "UpdateUserSchema"},
+		{Path: "/api/users/:id", Method: "PATCH", File: "users.go", Line: 20, AuthRoles: []string{"admin"}, Validate: "PatchUserSchema"},
+		{Path: "/api/users/:id", Method: "DELETE", File: "users.go", Line: 25, AuthRoles: []string{"admin"}},
+	}
+	errs, _ := Validate(routes)
+	if len(errs) != 0 {
+		t.Errorf("expected no errors for fully annotated routes, got %d: %v", len(errs), errs)
 	}
 }

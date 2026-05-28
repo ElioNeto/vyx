@@ -4,6 +4,7 @@ package gateway
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 
@@ -12,12 +13,26 @@ import (
 
 // JWTValidator implements application/gateway.JWTValidator using golang-jwt.
 type JWTValidator struct {
-	secret []byte
+	secret   []byte
+	issuer   string // expected issuer (optional)
+	audience string // expected audience (optional)
 }
 
 // NewJWTValidator creates a validator that checks HS256 tokens with the given secret.
+// For backward compatibility — does not validate iss, aud, or nbf.
 func NewJWTValidator(secret []byte) *JWTValidator {
-	return &JWTValidator{secret: secret}
+	return NewJWTValidatorWithClaims(secret, "", "")
+}
+
+// NewJWTValidatorWithClaims creates a validator that checks HS256 tokens and
+// additionally validates iss (issuer), aud (audience), and nbf (not before)
+// when the corresponding values are non-empty.
+func NewJWTValidatorWithClaims(secret []byte, issuer, audience string) *JWTValidator {
+	return &JWTValidator{
+		secret:   secret,
+		issuer:   issuer,
+		audience: audience,
+	}
 }
 
 // Validate parses and verifies a JWT, returning the extracted claims.
@@ -43,8 +58,35 @@ func (v *JWTValidator) Validate(tokenStr string) (*dgw.Claims, error) {
 		return nil, errors.New("jwt: invalid token claims")
 	}
 
+	// Validate iss (issuer) when an expected issuer is configured.
+	if v.issuer != "" && c.Issuer != v.issuer {
+		return nil, dgw.ErrUnauthorized
+	}
+
+	// Validate aud (audience) when an expected audience is configured.
+	if v.audience != "" {
+		if !contains(c.Audience, v.audience) {
+			return nil, dgw.ErrUnauthorized
+		}
+	}
+
+	// Validate nbf (not before) — reject tokens that are not yet valid.
+	if c.NotBefore != nil && time.Now().Before(c.NotBefore.Time) {
+		return nil, dgw.ErrUnauthorized
+	}
+
 	return &dgw.Claims{
 		UserID: c.UserID,
 		Roles:  c.Roles,
 	}, nil
+}
+
+// contains reports whether a slice of strings contains the target value.
+func contains(slice []string, target string) bool {
+	for _, s := range slice {
+		if s == target {
+			return true
+		}
+	}
+	return false
 }

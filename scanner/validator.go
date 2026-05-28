@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -12,8 +13,10 @@ var validMethods = map[string]bool{
 
 // Validate checks each route for correctness and returns semantic errors.
 // Each AnnotationError includes the File and Line from the originating Route.
-func Validate(routes []Route) []AnnotationError {
+// The second return value contains non-fatal warnings.
+func Validate(routes []Route) ([]AnnotationError, []string) {
 	var errs []AnnotationError
+	var warnings []string
 	seen := map[string]bool{}
 
 	for _, r := range routes {
@@ -40,7 +43,48 @@ func Validate(routes []Route) []AnnotationError {
 			})
 		}
 		seen[key] = true
+
+		// Semantic validation
+		if err := validateRoute(r); err != nil {
+			errs = append(errs, AnnotationError{
+				File:    r.File,
+				Line:    r.Line,
+				Message: err.Error(),
+			})
+		}
 	}
 
-	return errs
+	// Warnings for GET routes without @Response (future requirement)
+	for _, r := range routes {
+		if r.Method == "GET" && r.Type != "page" {
+			// TODO(#165): emit warning when @Response annotation is implemented
+			_ = r
+		}
+	}
+
+	return errs, warnings
+}
+
+// validateRoute checks that a route has the required annotations for its method.
+// Returns nil if valid, or an error describing what is missing.
+func validateRoute(r Route) error {
+	switch r.Method {
+	case "POST", "PUT", "PATCH":
+		if r.Validate == "" {
+			return fmt.Errorf("route %s %s: POST/PUT/PATCH routes must have @Validate annotation", r.Method, r.Path)
+		}
+	}
+
+	if len(r.AuthRoles) == 0 && r.Type != "page" {
+		return fmt.Errorf("route %s %s: all routes must have @Auth annotation with roles", r.Method, r.Path)
+	}
+
+	return nil
+}
+
+// PrintWarnings outputs each warning string to stderr prefixed with "warning: ".
+func PrintWarnings(warnings []string) {
+	for _, w := range warnings {
+		_, _ = fmt.Fprintf(os.Stderr, "warning: %s\n", w)
+	}
 }
