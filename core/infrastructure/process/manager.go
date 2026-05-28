@@ -73,35 +73,21 @@ func (m *Manager) Spawn(ctx context.Context, w *worker.Worker) error {
 	// leak (defence in depth — the process-group kill should handle it).
 	cmd.WaitDelay = 3 * time.Second
 
+	// Set up pipeLog goroutines for stdout/stderr when a log writer exists.
+	// The context for these goroutines is created AFTER cmd.Start() succeeds
+	// and cancelled when the process exits (see wait goroutine below).
 	var (
 		outWriter  io.WriteCloser
 		errWriter  io.WriteCloser
-		cancel     context.CancelFunc = func() {} // no-op default; replaced below when pipe logging
-		workerCtx  context.Context
+		outReader  io.Reader
+		errReader  io.Reader
+		cancel     context.CancelFunc
 	)
 	if m.logWriter != nil {
-		// Capture stdout/stderr through pipes so lines can be multiplexed
-		// into the TUI while still preserving the data in the ring buffer.
-		// Go exec creates an internal OS pipe and copies data to our
-		// io.Pipe writer; when the child exits, exec closes the internal
-		// pipe which causes the copy to finish, and then our io.Pipe is
-		// closed by exec's cleanup — do NOT close it here.
-		outReader, outW := io.Pipe()
-		errReader, errW := io.Pipe()
-		outWriter, errWriter = outW, errW
+		outReader, outWriter = io.Pipe()
+		errReader, errWriter = io.Pipe()
 		cmd.Stdout = outWriter
 		cmd.Stderr = errWriter
-
-		workerCtx, cancel = context.WithCancel(ctx)
-		workerID := w.ID
-		go func() {
-			defer recovery.LogPanic(nil, "process.pipe_log_stdout", nil)
-			m.pipeLog(workerCtx, m.logWriter, workerID, outReader)
-		}()
-		go func() {
-			defer recovery.LogPanic(nil, "process.pipe_log_stderr", nil)
-			m.pipeLog(workerCtx, m.logWriter, workerID, errReader)
-		}()
 	} else {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -114,6 +100,22 @@ func (m *Manager) Spawn(ctx context.Context, w *worker.Worker) error {
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("%w: %s", worker.ErrSpawnFailed, err.Error())
+	}
+
+	// Create cancel context for pipeLog goroutines AFTER process starts.
+	// This ensures cancel is always called on all code paths.
+	var pipeCtx context.Context
+	if m.logWriter != nil {
+		pipeCtx, cancel = context.WithCancel(ctx)
+		workerID := w.ID
+		go func() {
+			defer recovery.LogPanic(nil, "process.pipe_log_stdout", nil)
+			m.pipeLog(pipeCtx, m.logWriter, workerID, outReader)
+		}()
+		go func() {
+			defer recovery.LogPanic(nil, "process.pipe_log_stderr", nil)
+			m.pipeLog(pipeCtx, m.logWriter, workerID, errReader)
+		}()
 	}
 
 	m.mu.Lock()
