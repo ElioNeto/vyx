@@ -89,6 +89,7 @@ type LookupResult struct {
 
 // Lookup returns the RouteEntry and captured path params for the given
 // method+path, if any. Static segments take priority over param segments.
+// The Params map is nil for routes without path parameters.
 func (rm *RouteMap) Lookup(method, path string) (LookupResult, bool) {
 	root := (*routeNode)(atomic.LoadPointer(&rm.root))
 	if root == nil {
@@ -96,9 +97,8 @@ func (rm *RouteMap) Lookup(method, path string) (LookupResult, bool) {
 	}
 
 	segments := splitPath(path)
-	params := make(map[string]string)
 
-	node := traverse(root, segments, params)
+	node, params := traverse(root, segments, nil)
 	if node == nil {
 		return LookupResult{}, false
 	}
@@ -124,10 +124,11 @@ func splitPath(path string) []string {
 }
 
 // traverse walks the trie for the given path segments, filling params.
-// Returns nil when no match is found.
-func traverse(node *routeNode, segments []string, params map[string]string) *routeNode {
+// Returns (nil, nil) when no match is found.
+// The returned params map is nil when no path parameters were captured.
+func traverse(node *routeNode, segments []string, params map[string]string) (*routeNode, map[string]string) {
 	if len(segments) == 0 {
-		return node
+		return node, params
 	}
 
 	seg := segments[0]
@@ -135,8 +136,8 @@ func traverse(node *routeNode, segments []string, params map[string]string) *rou
 
 	// Static children win over param children.
 	if child, ok := node.children[seg]; ok {
-		if result := traverse(child, rest, params); result != nil {
-			return result
+		if result, p := traverse(child, rest, params); result != nil {
+			return result, p
 		}
 	}
 
@@ -145,16 +146,12 @@ func traverse(node *routeNode, segments []string, params map[string]string) *rou
 		// Use a temporary map so we don't pollute params on backtrack.
 		local := copyParams(params)
 		local[node.paramChild.paramName] = seg
-		if result := traverse(node.paramChild, rest, local); result != nil {
-			// Commit the captured params.
-			for k, v := range local {
-				params[k] = v
-			}
-			return result
+		if result, p := traverse(node.paramChild, rest, local); result != nil {
+			return result, p
 		}
 	}
 
-	return nil
+	return nil, nil
 }
 
 func copyParams(src map[string]string) map[string]string {

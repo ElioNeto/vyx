@@ -17,7 +17,6 @@ import (
 	dmetrics "github.com/ElioNeto/vyx/core/domain/metrics"
 	"github.com/ElioNeto/vyx/core/domain/pool"
 	"github.com/ElioNeto/vyx/core/application/lifecycle"
-	"github.com/ElioNeto/vyx/core/infrastructure/recovery"
 )
 
 const (
@@ -499,6 +498,14 @@ func (d *Dispatcher) sendAndReceive(ctx context.Context, req *dgw.GatewayRequest
 		lc.WorkerID = workerID
 	}
 
+	// Track active requests for pool load balancing (decremented on all return paths)
+	if d.poolMgr != nil {
+		if p, ok := d.poolMgr.GetPool(extractPrefix(workerID)); ok {
+			p.IncrementActiveReqs(workerID)
+			defer p.DecrementActiveReqs(workerID)
+		}
+	}
+
 	if err := d.transport.Send(dispatchCtx, workerID, ipc.Message{
 		Type:    ipc.TypeRequest,
 		Payload: payload,
@@ -525,43 +532,27 @@ func (d *Dispatcher) sendAndReceive(ctx context.Context, req *dgw.GatewayRequest
 		return d.handleWorkerError(ctx, req, &dgw.RouteEntry{WorkerID: workerID}, lc, statusCode, respMsg, cb)
 	}
 
-	// Increment active requests for pool tracking
-	if d.poolMgr != nil {
-		p, ok := d.poolMgr.GetPool(extractPrefix(workerID))
-		if ok {
-			p.IncrementActiveReqs(workerID)
-		}
-	}
-
 	return d.decodeWorkerResponse(respMsg, correlationID)
 }
 
 // selectWorker selects a worker from the pool based on the route configuration.
+// It does NOT track active requests — that is handled by the caller (sendAndReceive)
+// with a guaranteed deferred cleanup.
 func (d *Dispatcher) selectWorker(route *dgw.RouteEntry) string {
 	if d.poolMgr == nil {
 		return route.WorkerID
 	}
 
 	prefix := extractPrefix(route.WorkerID)
-	pool, ok := d.poolMgr.GetPool(prefix)
+	p, ok := d.poolMgr.GetPool(prefix)
 	if !ok {
 		return route.WorkerID
 	}
 
-	worker := pool.SelectWorker()
+	worker := p.SelectWorker()
 	if worker == nil {
 		return route.WorkerID
 	}
-
-	// Track active request
-	pool.IncrementActiveReqs(worker.ID)
-
-	// Schedule decrement when request completes (best effort)
-	go func(workerID string) {
-		defer recovery.LogPanic(&recovery.ZapAdapter{Logger: d.log}, "dispatcher.pool_cleanup", nil)
-		<-time.After(30 * time.Second) // timeout as fallback
-		pool.DecrementActiveReqs(workerID)
-	}(worker.ID)
 
 	return worker.ID
 }
