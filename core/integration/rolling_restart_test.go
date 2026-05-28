@@ -34,6 +34,8 @@ import (
 	dgw "github.com/ElioNeto/vyx/core/domain/gateway"
 	"github.com/ElioNeto/vyx/core/domain/ipc"
 	"github.com/ElioNeto/vyx/core/application/lifecycle"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -50,6 +52,37 @@ func (stubJWT) Validate(_ string) (*dgw.Claims, error) {
 type stubSchema struct{}
 
 func (stubSchema) Validate(_ string, _ []byte) error { return nil }
+
+// controllableTransport wraps slowTransport with a notification channel that
+// signals each time a request enters the Send phase (after drainer.Acquire).
+// This lets the test synchronize with the exact moment all pre-drain requests
+// are in-flight, eliminating flaky time.Sleep-based coordination.
+type controllableTransport struct {
+	*slowTransport
+	inflight chan struct{} // buffered; signalled once per Send call
+}
+
+func newControllableTransport(hold time.Duration, buf int) *controllableTransport {
+	return &controllableTransport{
+		slowTransport: &slowTransport{
+			registered:   make(map[string]bool),
+			holdDuration: hold,
+		},
+		inflight: make(chan struct{}, buf),
+	}
+}
+
+// Send sleeps for holdDuration (simulating a slow worker) and notifies
+// the test that this request has moved past drainer.Acquire.
+func (t *controllableTransport) Send(ctx context.Context, id string, msg ipc.Message) error {
+	// Non-blocking send: if the test already collected enough signals the
+	// channel stays full — that's fine.
+	select {
+	case t.inflight <- struct{}{}:
+	default:
+	}
+	return t.slowTransport.Send(ctx, id, msg)
+}
 
 // slowTransport simulates a worker IPC transport that takes holdDuration to
 // respond. This keeps the Dispatcher's Acquire semaphore held for that long,
@@ -113,8 +146,6 @@ func makeRequest() *dgw.GatewayRequest {
 	}
 }
 
-// ─── test ─────────────────────────────────────────────────────────────────────
-
 // requestResult categorizes the result of a single dispatch.
 type requestResult struct {
 	statusCode int
@@ -131,63 +162,31 @@ func dispatchAndClassify(dispatcher *apgw.Dispatcher, reqNum int) requestResult 
 	return requestResult{statusCode: sc, err: err}
 }
 
-// checkRequestResult validates a single request result and updates counters.
-func checkRequestResult(t *testing.T, reqNum int, result requestResult,
-	ok200, ok503, bad502, badOther *atomic.Int64) {
-	switch {
-	case result.err == nil && result.statusCode == 200:
-		ok200.Add(1)
-	case result.err == nil && result.statusCode == 503:
-		ok503.Add(1)
-	case result.err == nil && result.statusCode == 502:
-		bad502.Add(1)
-		t.Errorf("got 502 on request %d — worker killed while request was in flight", reqNum)
-	default:
-		badOther.Add(1)
-		t.Errorf("unexpected result on request %d: status=%d err=%v", reqNum, result.statusCode, result.err)
-	}
-}
-
-// triggerRollingRestart simulates a rolling restart of the worker.
-func triggerRollingRestart(t *testing.T, drainer *lifecycle.WorkerDrainer,
-	transport *slowTransport, workerID string, shutdownTimeout time.Duration, restartDelay time.Duration) {
-	time.Sleep(restartDelay)
-
-	// Step 1: mark draining — new requests will get 503.
-	drainer.MarkDraining(workerID)
-
-	// Step 2: wait for all in-flight requests to finish.
-	drainCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
-	if err := drainer.Drain(drainCtx, workerID, shutdownTimeout); err != nil {
-		t.Errorf("drain timed out: %v", err)
-	}
-
-	// Step 3: "kill" old process (cleanup drainer state) + respawn.
-	drainer.Cleanup(workerID)
-	// Re-register IPC socket (simulates process respawn).
-	_ = transport.Register(context.Background(), workerID)
-}
+// ─── test ─────────────────────────────────────────────────────────────────────
 
 // TestNoDropsDuringRollingRestart verifies that:
 //   - In-flight requests that started before MarkDraining all complete with 200.
 //   - Requests dispatched after MarkDraining receive 503 (not 502).
 //   - No request ever receives 502 (premature kill).
+//
+// It uses a controllableTransport to synchronise on the exact moment all
+// pre-drain requests have called drainer.Acquire, eliminating flaky sleeps.
 func TestNoDropsDuringRollingRestart(t *testing.T) {
 	t.Parallel()
 
 	const (
 		workerID        = "node:api"
-		numRequests     = 40
-		holdDuration    = 80 * time.Millisecond  // how long each request is "in flight"
-		shutdownTimeout = 5 * time.Second
-		restartDelay    = 20 * time.Millisecond  // trigger drain after this many ms
+		numPreDrain     = 20 // requests started BEFORE MarkDraining
+		numPostDrain    = 20 // requests started AFTER  MarkDraining
+		holdDuration    = 200 * time.Millisecond
+		shutdownTimeout = 10 * time.Second
 	)
 
 	log, _ := zap.NewDevelopment()
 	drainer := lifecycle.NewWorkerDrainer()
-	transport := newSlowTransport(holdDuration)
-	_ = transport.Register(context.Background(), workerID)
+	transport := newControllableTransport(holdDuration, numPreDrain+numPostDrain)
+	require.NoError(t, transport.Register(context.Background(), workerID),
+		"initial transport registration must succeed")
 
 	rm := buildRouteMap(workerID)
 
@@ -202,49 +201,103 @@ func TestNoDropsDuringRollingRestart(t *testing.T) {
 	})
 
 	var (
-		ok503  atomic.Int64 // requests correctly rejected after drain start
-		ok200  atomic.Int64 // requests that completed normally
-		bad502 atomic.Int64 // should remain 0
-		badOther atomic.Int64
+		ok503   atomic.Int64 // requests correctly rejected after drain start
+		ok200   atomic.Int64 // requests that completed normally
+		bad502  atomic.Int64 // should remain 0
+		totalOK atomic.Int64 // total requests that returned 200 or 503
 	)
-
 	var wg sync.WaitGroup
 
-	// Launch requests spread over 2×restartDelay so some start before and
-	// some start after MarkDraining.
-	for i := 0; i < numRequests; i++ {
+	// ── phase 1: start pre-drain requests ──────────────────────────────────
+	//
+	// These requests start before MarkDraining and simulate slow in-flight
+	// requests that are still being processed during a rolling restart.
+	for i := range numPreDrain {
 		wg.Add(1)
-		go func(i int) {
+		go func(idx int) {
 			defer wg.Done()
-			// Spread start times: first half immediately, second half after drain
-			// triggers.
-			if i >= numRequests/2 {
-				time.Sleep(restartDelay * 3)
+			result := dispatchAndClassify(dispatcher, idx)
+			switch {
+			case result.err == nil && result.statusCode == 200:
+				ok200.Add(1)
+				totalOK.Add(1)
+			case result.err == nil && result.statusCode == 502:
+				bad502.Add(1)
+				t.Errorf("pre-drain request %d: got 502 — worker killed while in flight", idx)
+			default:
+				t.Errorf("pre-drain request %d: unexpected status=%d err=%v",
+					idx, result.statusCode, result.err)
 			}
-			result := dispatchAndClassify(dispatcher, i)
-			checkRequestResult(t, i, result, &ok200, &ok503, &bad502, &badOther)
 		}(i)
 	}
 
-	// Trigger the rolling restart after restartDelay — while first-half
-	// requests are still holding the slow transport.
-	go triggerRollingRestart(t, drainer, transport, workerID, shutdownTimeout, restartDelay)
+	// Wait for every pre-drain request to have called drainer.Acquire
+	// (signalled by controllableTransport.Send).  This guarantees they are
+	// all in-flight before we trigger the rolling restart, so none can
+	// accidentally race to checkDrainStatus and get 503.
+	t.Log("waiting for all pre-drain requests to acquire in-flight slot ...")
+	for range numPreDrain {
+		<-transport.inflight
+	}
+	t.Log("all pre-drain requests are in-flight")
+
+	// ── phase 2: mark draining and start post-drain requests ───────────────
+	//
+	// drainStarted is closed after MarkDraining so post-drain requests
+	// cannot dispatch before the draining flag is set.
+	drainStarted := make(chan struct{})
+
+	drainer.MarkDraining(workerID)
+	close(drainStarted)
+
+	for i := range numPostDrain {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			<-drainStarted // still useful if goroutine creation is delayed
+			result := dispatchAndClassify(dispatcher, numPreDrain+idx)
+			switch {
+			case result.err == nil && result.statusCode == 503:
+				ok503.Add(1)
+				totalOK.Add(1)
+			case result.err == nil && result.statusCode == 502:
+				bad502.Add(1)
+				t.Errorf("post-drain request %d: got 502", idx)
+			default:
+				t.Errorf("post-drain request %d: unexpected status=%d err=%v",
+					idx, result.statusCode, result.err)
+			}
+		}(i)
+	}
+
+	// ── phase 3: drain in-flight requests ──────────────────────────────────
+	//
+	// Drain waits for the pre-drain WaitGroup counter to reach 0.  Because
+	// we fixed the Dispatcher's Acquire/Release balance, this completes as
+	// soon as the pre-drain requests finish their holdDuration sleep.
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer drainCancel()
+
+	require.NoError(t, drainer.Drain(drainCtx, workerID, shutdownTimeout),
+		"drain must complete before timeout — all in-flight requests finished")
+
+	// ── phase 4: cleanup and wait for all goroutines ───────────────────────
+	drainer.Cleanup(workerID)
+	require.NoError(t, transport.Register(context.Background(), workerID),
+		"re-registration after restart must succeed")
 
 	wg.Wait()
 
-	t.Logf("results: 200=%d  503=%d  502=%d  other=%d",
-		ok200.Load(), ok503.Load(), bad502.Load(), badOther.Load())
-
-	if bad502.Load() > 0 {
-		t.Errorf("FAIL: %d request(s) returned 502 — in-flight requests were dropped",
-			bad502.Load())
-	}
-	if ok200.Load() == 0 {
-		t.Error("FAIL: no request completed successfully with 200")
-	}
-	if ok503.Load() == 0 {
-		t.Error("FAIL: no request was correctly rejected with 503 after drain start")
-	}
-	fmt.Printf("✅ rolling restart: 200=%d 503=%d 502=%d\n",
+	t.Logf("results: 200=%d  503=%d  502=%d  totalOK=%d",
+		ok200.Load(), ok503.Load(), bad502.Load(), totalOK.Load())
+	fmt.Printf("rolling restart: 200=%d 503=%d 502=%d\n",
 		ok200.Load(), ok503.Load(), bad502.Load())
+
+	// ── assertions ────────────────────────────────────────────────────────
+	assert.Equal(t, int64(numPreDrain), ok200.Load(),
+		"all pre-drain requests must complete with 200")
+	assert.Equal(t, int64(numPostDrain), ok503.Load(),
+		"all post-drain requests must be rejected with 503")
+	assert.Zero(t, bad502.Load(),
+		"no request must return 502 (premature worker kill)")
 }

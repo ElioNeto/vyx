@@ -270,20 +270,15 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req *dgw.GatewayRequest) (*dg
 		return resp, lc.Err
 	}
 
-	d.trackInFlight(route.WorkerID, lc)
-
 	if resp, ok := d.validateJWT(ctx, req, route, lc, &statusCode); !ok {
-		d.releaseInFlight(lc)
 		return resp, lc.Err
 	}
 
 	if resp, ok := d.validateSchema(ctx, req, route, lc, &statusCode); !ok {
-		d.releaseInFlight(lc)
 		return resp, lc.Err
 	}
 
 	if resp, ok := d.runPreDispatchHooks(ctx, req, *route, lc, &statusCode); !ok {
-		d.releaseInFlight(lc)
 		return resp, lc.Err
 	}
 
@@ -382,14 +377,6 @@ func (d *Dispatcher) checkDrainStatus(ctx context.Context, req *dgw.GatewayReque
 		}, false
 	}
 	return nil, true
-}
-
-// trackInFlight tracks the in-flight request for graceful draining.
-func (d *Dispatcher) trackInFlight(workerID string, lc *LifecycleContext) {
-	if d.drainer != nil {
-		d.drainer.Acquire(workerID)
-		lc.WorkerID = workerID
-	}
 }
 
 // releaseInFlight releases the in-flight request tracking.
@@ -492,7 +479,9 @@ func (d *Dispatcher) sendAndReceive(ctx context.Context, req *dgw.GatewayRequest
 	dispatchCtx, cancel := context.WithTimeout(ctx, d.timeout)
 	defer cancel()
 
-	// Track in-flight for the selected worker
+	// Track in-flight for the selected worker.
+	// Acquire is called here (after all pre-dispatch checks pass) so that
+	// the drainer only counts requests that actually reach the worker.
 	if d.drainer != nil {
 		d.drainer.Acquire(workerID)
 		lc.WorkerID = workerID
@@ -510,13 +499,11 @@ func (d *Dispatcher) sendAndReceive(ctx context.Context, req *dgw.GatewayRequest
 		Type:    ipc.TypeRequest,
 		Payload: payload,
 	}); err != nil {
-		d.releaseInFlight(lc)
 		return d.handleSendError(ctx, req, &dgw.RouteEntry{WorkerID: workerID}, lc, statusCode, err, cb)
 	}
 
 	respMsg, err := d.transport.ReceiveResponse(dispatchCtx, workerID)
 	if err != nil {
-		d.releaseInFlight(lc)
 		return d.handleReceiveError(dispatchCtx, receiveErrorConfig{
 			Req:        req,
 			Route:      &dgw.RouteEntry{WorkerID: workerID},
@@ -528,7 +515,6 @@ func (d *Dispatcher) sendAndReceive(ctx context.Context, req *dgw.GatewayRequest
 	}
 
 	if respMsg.Type == ipc.TypeError {
-		d.releaseInFlight(lc)
 		return d.handleWorkerError(ctx, req, &dgw.RouteEntry{WorkerID: workerID}, lc, statusCode, respMsg, cb)
 	}
 

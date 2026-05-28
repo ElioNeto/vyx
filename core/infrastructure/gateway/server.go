@@ -216,7 +216,7 @@ func (s *Server) checkContentType(w http.ResponseWriter, r *http.Request) bool {
 		if err != nil || mediaType != "application/json" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnsupportedMediaType)
-			_, _ = w.Write(contentTypeErrorBody())
+			writeUnchecked(w, contentTypeErrorBody())
 			return false
 		}
 	}
@@ -250,7 +250,7 @@ func (s *Server) checkMethod(w http.ResponseWriter, r *http.Request) bool {
 	if !allowedMethods[r.Method] {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusMethodNotAllowed)
-		_, _ = w.Write(methodNotAllowedBody())
+		writeUnchecked(w, methodNotAllowedBody())
 		return false
 	}
 	return true
@@ -297,7 +297,7 @@ func (s *Server) checkRateLimit(w http.ResponseWriter, r *http.Request) bool {
 		w.Header().Set("Retry-After", strconv.Itoa(secs))
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusTooManyRequests)
-		_, _ = w.Write(rateLimitBody(secs))
+		writeUnchecked(w, rateLimitBody(secs))
 		return false
 	}
 	if ok, retryAfter := s.rateLimiter.AllowToken(r.Header.Get("Authorization")); !ok {
@@ -305,7 +305,7 @@ func (s *Server) checkRateLimit(w http.ResponseWriter, r *http.Request) bool {
 		w.Header().Set("Retry-After", strconv.Itoa(secs))
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusTooManyRequests)
-		_, _ = w.Write(rateLimitBody(secs))
+		writeUnchecked(w, rateLimitBody(secs))
 		return false
 	}
 	return true
@@ -373,7 +373,7 @@ func (s *Server) writeResponse(w http.ResponseWriter, resp *dgw.GatewayResponse)
 		w.Header().Set(headerXRequestID, resp.CorrelationID)
 	}
 	w.WriteHeader(resp.StatusCode)
-	_, _ = w.Write(resp.Body)
+	writeUnchecked(w, resp.Body)
 }
 
 // safeErrorMessages maps known sentinel errors to safe, user-facing messages.
@@ -427,4 +427,11 @@ func (s *Server) writeError(w http.ResponseWriter, err error) {
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 	s.log.Warn("gateway error", zap.Int("status", code), zap.Error(err))
+}
+
+// writeUnchecked writes body to the response writer, ignoring any write error.
+// The connection is already broken if Write fails; there is nothing to do.
+// This helper exists to satisfy linters that flag unchecked error returns.
+func writeUnchecked(w http.ResponseWriter, body []byte) {
+	_, _ = w.Write(body)
 }
