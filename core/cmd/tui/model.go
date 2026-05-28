@@ -2,6 +2,7 @@
 package tui
 
 import (
+	"sort"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -94,6 +95,7 @@ func (m *Model) refreshWorkers() {
 	for w := range seen {
 		workers = append(workers, w)
 	}
+	sort.Strings(workers) // stable ordering for deterministic tab cycling
 	m.workers = workers
 }
 
