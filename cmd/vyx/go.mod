@@ -1,6 +1,6 @@
 module github.com/ElioNeto/vyx/cli
 
-go 1.25.10
+go 1.25.9
 
 require (
 	github.com/ElioNeto/vyx/core v0.0.0
