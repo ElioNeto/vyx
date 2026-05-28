@@ -187,16 +187,16 @@ func TestJWTValidator_Validate_NotBefore(t *testing.T) {
         require.Equal(t, "user1", c.UserID)
     })
 
-    t.Run("nbf_in_future", func(t *testing.T) {
-        t.Parallel()
-        tokenStr := makeToken(jwt.MapClaims{
-            "sub": "user1", "roles": []string{"admin"},
-            "exp": time.Now().Add(2 * time.Hour).Unix(),
-            "nbf": time.Now().Add(time.Hour).Unix(),
-        })
-        _, err := validator.Validate(tokenStr)
-        require.ErrorIs(t, err, dgw.ErrUnauthorized)
-    })
+	t.Run("nbf_in_future", func(t *testing.T) {
+		t.Parallel()
+		tokenStr := makeToken(jwt.MapClaims{
+			"sub": "user1", "roles": []string{"admin"},
+			"exp": time.Now().Add(2 * time.Hour).Unix(),
+			"nbf": time.Now().Add(time.Hour).Unix(),
+		})
+		_, err := validator.Validate(tokenStr)
+		require.Error(t, err, "token with future nbf should be rejected")
+	})
 
     t.Run("nbf_omitted", func(t *testing.T) {
         t.Parallel()

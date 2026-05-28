@@ -43,16 +43,22 @@ func Redact(input string) string {
 			pos += idx
 
 			// Check what follows the field name: = or :
-			rest := result[pos+len(field):]
-			if len(rest) > 0 && (rest[0] == '=' || rest[0] == ':') {
-				// Find end of value
-				end := strings.IndexAny(rest, " ,}\n\t&")
+			valueStart := pos + len(field)
+			if valueStart >= len(result) {
+				break
+			}
+			if result[valueStart] == '=' || result[valueStart] == ':' {
+				// Get the value after the separator
+				valueRest := result[valueStart+1:]
+				// Find end of value (separator or end of string)
+				end := strings.IndexAny(valueRest, " ,}\n\t&")
 				if end < 0 {
-					end = len(rest)
+					end = len(valueRest)
 				}
-				// Replace the value
-				replacement := strings.Repeat("*", end-1)
-				result = result[:pos+len(field)+1] + replacement + result[pos+len(field)+1+end:]
+				if end > 0 {
+					// Replace the value with asterisks
+					result = result[:valueStart+1] + strings.Repeat("*", end) + result[valueStart+1+end:]
+				}
 			}
 			idx = pos + len(field)
 		}
