@@ -22,7 +22,7 @@ workers:
     shutdown_timeout: 5s
 
   - id: python:payments
-    command: python workers/python/worker.py
+    command: python3 workers/python/worker.py
     working_dir: .
     replicas: 1
     strategy: round-robin

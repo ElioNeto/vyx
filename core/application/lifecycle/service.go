@@ -286,6 +286,11 @@ func (s *Service) MarkRunning(ctx context.Context, id string) error {
 	return s.repo.Save(ctx, w)
 }
 
+// GetWorker retrieves a worker by ID from the repository.
+func (s *Service) GetWorker(ctx context.Context, id string) (*worker.Worker, error) {
+	return s.repo.FindByID(ctx, id)
+}
+
 // RestartWorker stops and re-spawns a worker (called by the monitor after backoff).
 // It recreates the IPC endpoint and re-arms the heartbeat read loop so the
 // restarted process can reconnect on its fresh Named Pipe / UDS handle.

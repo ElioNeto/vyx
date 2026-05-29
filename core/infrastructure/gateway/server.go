@@ -206,14 +206,15 @@ func contentTypeErrorBody() []byte {
 }
 
 // checkContentType validates that POST, PUT and PATCH requests have
-// Content-Type: application/json.  Returns false and writes a 415 response
-// when the media type is missing or not application/json.
+// Content-Type: application/json or application/x-www-form-urlencoded.
+// Returns false and writes a 415 response when the media type is missing or
+// not one of the accepted types.
 func (s *Server) checkContentType(w http.ResponseWriter, r *http.Request) bool {
 	switch r.Method {
 	case http.MethodPost, http.MethodPut, http.MethodPatch:
 		ct := r.Header.Get("Content-Type")
 		mediaType, _, err := mime.ParseMediaType(ct)
-		if err != nil || mediaType != "application/json" {
+		if err != nil || (mediaType != "application/json" && mediaType != "application/x-www-form-urlencoded") {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnsupportedMediaType)
 			writeUnchecked(w, contentTypeErrorBody())
@@ -368,7 +369,11 @@ func (s *Server) writeResponse(w http.ResponseWriter, resp *dgw.GatewayResponse)
 	for k, v := range resp.Headers {
 		w.Header().Set(k, sanitizeHeaderValue(v))
 	}
-	w.Header().Set("Content-Type", "application/json")
+	// Only default to application/json if the worker did not set a Content-Type.
+	// SSR page workers (Node.js) return text/html, which must be preserved.
+	if w.Header().Get("Content-Type") == "" {
+		w.Header().Set("Content-Type", "application/json")
+	}
 	if resp.CorrelationID != "" {
 		w.Header().Set(headerXRequestID, resp.CorrelationID)
 	}

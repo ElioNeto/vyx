@@ -32,18 +32,23 @@
 package main
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"net"
+	"net/url"
 	"os"
 	"os/signal"
 	"runtime"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 // ─── IPC protocol types (mirrors core/domain/ipc/message.go) ─────────────────
@@ -138,14 +143,14 @@ func init() {
 	// Pre-seeded users
 	users["1"] = user{
 		ID:       "1",
-		Name:     "Admin User",
+		Name:     "admin",
 		Email:    "admin@dashboard.local",
 		Role:     "admin",
 		Password: "admin123",
 	}
 	users["2"] = user{
 		ID:       "2",
-		Name:     "Regular User",
+		Name:     "user",
 		Email:    "user@dashboard.local",
 		Role:     "user",
 		Password: "password",
@@ -235,11 +240,33 @@ func toPublic(u user) userPublic {
 // @Auth(roles: ["guest"])
 func handleLogin(req request) response {
 	var body loginRequest
-	if err := json.Unmarshal(req.Body, &body); err != nil {
-		return response{
-			StatusCode: 400,
-			Headers:    map[string]string{"Content-Type": "application/json"},
-			Body:       map[string]string{"error": "invalid request body"},
+
+	// Try JSON first, then form-encoded (for browsers without JS).
+	ct := req.Headers["Content-Type"]
+	isForm := strings.Contains(ct, "application/x-www-form-urlencoded")
+	if isForm {
+		// The body is sent as a JSON-escaped string. Unmarshal it first.
+		var rawBody string
+		if err := json.Unmarshal(req.Body, &rawBody); err != nil {
+			rawBody = string(req.Body)
+		}
+		vals, err := url.ParseQuery(rawBody)
+		if err != nil {
+			return response{
+				StatusCode: 400,
+				Headers:    map[string]string{"Content-Type": "application/json"},
+				Body:       map[string]string{"error": "invalid form data"},
+			}
+		}
+		body.Username = vals.Get("username")
+		body.Password = vals.Get("password")
+	} else {
+		if err := json.Unmarshal(req.Body, &body); err != nil {
+			return response{
+				StatusCode: 400,
+				Headers:    map[string]string{"Content-Type": "application/json"},
+				Body:       map[string]string{"error": "invalid request body"},
+			}
 		}
 	}
 
@@ -262,17 +289,68 @@ func handleLogin(req request) response {
 		}
 	}
 
-	// Mock JWT token (for demo purposes only)
-	token := fmt.Sprintf("vyx_%s_%s", foundUser.ID, foundUser.Role)
+	token, err := generateJWT(foundUser.ID, foundUser.Role, foundUser.Name)
+	if err != nil {
+		return response{
+			StatusCode: 500,
+			Headers:    map[string]string{"Content-Type": "application/json"},
+			Body:       map[string]string{"error": "failed to generate token"},
+		}
+	}
+
+	if isForm {
+		// Browser form submission — set cookie and redirect to dashboard.
+		return response{
+			StatusCode: 302,
+			Headers: map[string]string{
+				"Location":              "/dashboard",
+				"Set-Cookie":            "vyx_token=" + token + "; Path=/; HttpOnly; SameSite=Lax",
+				"Content-Type":          "text/html; charset=utf-8",
+			},
+			Body: "<!DOCTYPE html><html><body>Redirecting to dashboard...</body></html>",
+		}
+	}
+
+	// API JSON response for fetch/XHR clients.
 	resp := loginResponse{
 		Token: token,
 		User:  toPublic(*foundUser),
 	}
 	return response{
 		StatusCode: 200,
-		Headers:    map[string]string{"Content-Type": "application/json"},
-		Body:       resp,
+		Headers: map[string]string{
+			"Content-Type": "application/json",
+			"Set-Cookie":   "vyx_token=" + token + "; Path=/; HttpOnly; SameSite=Lax",
+		},
+		Body: resp,
 	}
+}
+
+// generateJWT creates a valid HS256 JWT signed with JWT_SECRET env var.
+// The generated token is compatible with core/infrastructure/gateway/jwt.go.
+func generateJWT(sub, role, name string) (string, error) {
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		return "", fmt.Errorf("JWT_SECRET not set")
+	}
+
+	header := `{"alg":"HS256","typ":"JWT"}`
+	now := time.Now()
+	payload := fmt.Sprintf(
+		`{"sub":"%s","name":"%s","roles":["%s"],"iat":%d,"exp":%d}`,
+		sub, name, role, now.Unix(), now.Add(24*time.Hour).Unix(),
+	)
+
+	b64 := func(data string) string {
+		return base64.RawURLEncoding.EncodeToString([]byte(data))
+	}
+
+	signingInput := b64(header) + "." + b64(payload)
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(signingInput))
+	signature := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+
+	return signingInput + "." + signature, nil
 }
 
 // @Route(GET /api/users)

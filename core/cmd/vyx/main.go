@@ -607,6 +607,8 @@ func runServer(devMode, withTUI bool) {
 		Service:       service,
 		Transport:     transport,
 		CfgLoader:     cfgLoader,
+		Rm:            rm,
+		PoolMgr:       poolMgr,
 		HbSender:      hbSender,
 		HbReceiver:    hbReceiver,
 		HealthMonitor: healthMonitor,
@@ -825,6 +827,8 @@ type startServicesConfig struct {
 	Service       *lifecycle.Service
 	Transport     ipc.Transport
 	CfgLoader     *infracfg.Loader
+	Rm            *dgw.RouteMap
+	PoolMgr       *pool.Manager
 	HbSender      *heartbeat.Sender
 	HbReceiver    *heartbeat.Receiver
 	HealthMonitor *monitor.Monitor
@@ -860,7 +864,7 @@ func startServices(ctx context.Context, cfg startServicesConfig) {
 		}()
 	}
 
-	spawnWorkers(ctx, cfg.Cfg, cfg.Service, cfg.Transport, cfg.Log, cfg.HbReceiver)
+	spawnWorkers(ctx, cfg.Cfg, cfg.Service, cfg.Transport, cfg.Log, cfg.HbReceiver, cfg.Rm, cfg.PoolMgr)
 
 	go func() {
 		defer recovery.LogPanic(&recovery.ZapAdapter{Logger: cfg.Log}, "health_monitor", nil)
@@ -894,22 +898,31 @@ func startServices(ctx context.Context, cfg startServicesConfig) {
 }
 
 // spawnWorkers spawns all workers defined in the config.
-func spawnWorkers(ctx context.Context, cfg *doamincfg.Config, service *lifecycle.Service, transport ipc.Transport, log *zap.Logger, hbReceiver *heartbeat.Receiver) {
+func spawnWorkers(ctx context.Context, cfg *doamincfg.Config, service *lifecycle.Service, transport ipc.Transport, log *zap.Logger, hbReceiver *heartbeat.Receiver, rm *dgw.RouteMap, poolMgr *pool.Manager) {
 	socketDir := cfg.IPC.SocketDir
 	if socketDir == "" {
 		socketDir = uds.DefaultSocketDir
 	}
 	for _, wcfg := range cfg.Workers {
-		spawnWorker(ctx, wcfg, service, transport, socketDir, log, hbReceiver)
+		spawnWorker(ctx, wcfg, service, transport, socketDir, log, hbReceiver, rm, poolMgr)
 	}
 }
 
 // spawnWorker spawns a single worker with the given config.
-func spawnWorker(ctx context.Context, wcfg doamincfg.WorkerConfig, service *lifecycle.Service, transport ipc.Transport, socketDir string, log *zap.Logger, hbReceiver *heartbeat.Receiver) {
+func spawnWorker(ctx context.Context, wcfg doamincfg.WorkerConfig, service *lifecycle.Service, transport ipc.Transport, socketDir string, log *zap.Logger, hbReceiver *heartbeat.Receiver, rm *dgw.RouteMap, poolMgr *pool.Manager) {
 	replicas := wcfg.Replicas
 	if replicas <= 0 {
 		replicas = 1
 	}
+
+	// Register a pool for this worker type so the dispatcher can balance across replicas.
+	if poolMgr != nil && replicas > 1 {
+		poolMgr.RegisterPool(wcfg.ID, pool.ManagerConfig{
+			Replicas: replicas,
+			Strategy: pool.Strategy(wcfg.Strategy),
+		})
+	}
+
 	for i := 0; i < replicas; i++ {
 		workerID := buildWorkerID(wcfg.ID, i, replicas)
 		spawnWorkerInstance(ctx, spawnWorkerInstanceConfig{
@@ -920,6 +933,8 @@ func spawnWorker(ctx context.Context, wcfg doamincfg.WorkerConfig, service *life
 			SocketDir:   socketDir,
 			Log:         log,
 			HbReceiver:  hbReceiver,
+			Rm:          rm,
+			PoolMgr:     poolMgr,
 		})
 	}
 }
@@ -941,6 +956,8 @@ type spawnWorkerInstanceConfig struct {
 	SocketDir   string
 	Log         *zap.Logger
 	HbReceiver  *heartbeat.Receiver
+	Rm          *dgw.RouteMap
+	PoolMgr     *pool.Manager
 }
 
 // spawnWorkerInstance spawns a single worker instance.
@@ -980,7 +997,25 @@ func spawnWorkerInstance(ctx context.Context, cfg spawnWorkerInstanceConfig) {
 		zap.String("command", cfg.Wcfg.Command),
 	)
 
-	waitForWorkerHandshake(spawnCtx, cfg.WorkerID, cfg.Transport, cfg.Service, cfg.Log)
+	waitForWorkerHandshake(spawnCtx, cfg.WorkerID, cfg.Transport, cfg.Service, cfg.Log, cfg.Rm)
+
+	// Add the worker to the pool so the dispatcher can find it across replicas.
+	// We must fetch the worker from the repo because MarkRunning (called during
+	// handshake) updates the state in the repo but not our local `w` object.
+	if cfg.PoolMgr != nil {
+		prefix := pool.ExtractPrefix(cfg.WorkerID)
+		if p, ok := cfg.PoolMgr.GetPool(prefix); ok {
+			if aliveWorker, err := cfg.Service.GetWorker(ctx, cfg.WorkerID); err == nil && aliveWorker != nil {
+				p.AddWorker(aliveWorker)
+			} else {
+				cfg.Log.Warn("failed to fetch worker from repo for pool registration",
+					zap.String("worker_id", cfg.WorkerID),
+					zap.Error(err),
+				)
+			}
+		}
+	}
+
 	startWorkerHeartbeat(ctx, w.ID, cfg.HbReceiver, cfg.Log)
 }
 
@@ -1030,8 +1065,8 @@ func getVyxDir() string {
 }
 
 // waitForWorkerHandshake waits for the worker to complete IPC handshake.
-func waitForWorkerHandshake(spawnCtx context.Context, workerID string, transport ipc.Transport, service *lifecycle.Service, log *zap.Logger) {
-	hsHandler := handshake.NewHandler(transport, nil, service, log) // RouteMap not needed here
+func waitForWorkerHandshake(spawnCtx context.Context, workerID string, transport ipc.Transport, service *lifecycle.Service, log *zap.Logger, rm *dgw.RouteMap) {
+	hsHandler := handshake.NewHandler(transport, rm, service, log)
 	hsErr := waitForHandshake(spawnCtx, hsHandler, workerID, log)
 	if hsErr != nil {
 		log.Error("worker handshake failed",

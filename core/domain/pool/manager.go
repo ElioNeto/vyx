@@ -118,7 +118,7 @@ func (m *Manager) SpawnWorkers(ctx context.Context, workerIDPrefix string, worke
 // ReplaceWorker removes an unhealthy worker and spawns a new one.
 func (m *Manager) ReplaceWorker(ctx context.Context, workerID string) error {
 	// Extract prefix
-	prefix := extractPrefix(workerID)
+	prefix := ExtractPrefix(workerID)
 
 	m.mu.RLock()
 	pool, ok := m.pools[prefix]
@@ -231,9 +231,9 @@ func (m *Manager) StopAll(ctx context.Context) error {
 	return nil
 }
 
-// extractPrefix extracts the prefix from a worker ID.
+// ExtractPrefix extracts the prefix from a worker ID.
 // Example: "node:products-2" -> "node:products"
-func extractPrefix(workerID string) string {
+func ExtractPrefix(workerID string) string {
 	// Find the last dash followed by a number
 	for i := len(workerID) - 1; i >= 0; i-- {
 		if workerID[i] == '-' {

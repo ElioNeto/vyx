@@ -270,7 +270,7 @@ func TestValidateSchema_Failure(t *testing.T) {
 	req := &dgw.GatewayRequest{
 		Method:  "POST",
 		Path:    "/ping",
-		Headers: map[string]string{"Authorization": "Bearer t"},
+		Headers: map[string]string{"Authorization": "Bearer t", "Content-Type": "application/json"},
 		Query:   map[string]string{},
 		Body:    []byte(`{"ok":true}`),
 	}

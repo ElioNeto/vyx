@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -394,6 +395,15 @@ func (d *Dispatcher) validateJWT(ctx context.Context, req *dgw.GatewayRequest, r
 
 	token := req.Headers["Authorization"]
 	if token == "" {
+		// Fall back to vyx_token cookie for browser-based navigation.
+		token = cookieValue(req.Headers["Cookie"], "vyx_token")
+	}
+	if token == "" {
+		// If the route allows "guest" role, treat unauthenticated requests as guest.
+		if hasRole(route.AuthRoles, "guest") {
+			req.Claims = &dgw.Claims{Roles: []string{"guest"}}
+			return nil, true
+		}
 		*statusCode = 401
 		lc.StatusCode = 401
 		lc.Err = dgw.ErrUnauthorized
@@ -423,6 +433,16 @@ func (d *Dispatcher) validateJWT(ctx context.Context, req *dgw.GatewayRequest, r
 	return nil, true
 }
 
+// hasRole returns true if the given role is present in the roles slice.
+func hasRole(roles []string, role string) bool {
+	for _, r := range roles {
+		if r == role {
+			return true
+		}
+	}
+	return false
+}
+
 // stripBearerPrefix removes the "Bearer " prefix from a token if present.
 func (d *Dispatcher) stripBearerPrefix(token string) string {
 	if len(token) > 7 && token[:7] == "Bearer " {
@@ -432,8 +452,9 @@ func (d *Dispatcher) stripBearerPrefix(token string) string {
 }
 
 // validateSchema handles JSON Schema validation.
+// Skips validation for non-JSON content types (e.g. form-encoded browser submissions).
 func (d *Dispatcher) validateSchema(ctx context.Context, req *dgw.GatewayRequest, route *dgw.RouteEntry, lc *LifecycleContext, statusCode *int) (*dgw.GatewayResponse, bool) {
-	if route.Validate != "" && len(req.Body) > 0 {
+	if route.Validate != "" && len(req.Body) > 0 && isJSONContentType(req.Headers["Content-Type"]) {
 		if err := d.schema.Validate(route.Validate, req.Body); err != nil {
 			*statusCode = 400
 			lc.StatusCode = 400
@@ -573,7 +594,7 @@ type requestPayload struct {
 	Headers       map[string]string `json:"headers"`
 	Query         map[string]string `json:"query"`
 	Params        map[string]string `json:"params"`
-	Body          []byte            `json:"body"`
+	Body          json.RawMessage   `json:"body,omitempty"`
 	Claims        *dgw.Claims       `json:"claims"`
 	ClientIP      string            `json:"client_ip,omitempty"`
 	CorrelationID string            `json:"correlation_id"`
@@ -583,13 +604,27 @@ type requestPayload struct {
 // buildIPCPayload builds the IPC request payload using a typed struct
 // instead of map[string]any to reduce allocations on the hot path.
 func (d *Dispatcher) buildIPCPayload(req *dgw.GatewayRequest, correlationID string) ([]byte, error) {
+	var body json.RawMessage
+	if len(req.Body) > 0 {
+		if isJSONContentType(req.Headers["Content-Type"]) {
+			// Preserve JSON structure for workers that parse the body.
+			body = json.RawMessage(req.Body)
+		} else {
+			// Non-JSON bodies (e.g. form-urlencoded) must be sent as escaped strings.
+			bodyStr, err := json.Marshal(string(req.Body))
+			if err != nil {
+				return nil, err
+			}
+			body = json.RawMessage(bodyStr)
+		}
+	}
 	return json.Marshal(requestPayload{
 		Method:        req.Method,
 		Path:          req.Path,
 		Headers:       req.Headers,
 		Query:         req.Query,
 		Params:        req.Params,
-		Body:          req.Body,
+		Body:          body,
 		Claims:        req.Claims,
 		ClientIP:      req.ClientIP,
 		CorrelationID: correlationID,
@@ -689,7 +724,7 @@ func (d *Dispatcher) processWorkerResponse(ctx context.Context, req *dgw.Gateway
 	resp := &dgw.GatewayResponse{
 		StatusCode:    workerResp.StatusCode,
 		Headers:       workerResp.Headers,
-		Body:          workerResp.Body,
+		Body:          bodyAnyToBytes(workerResp.Body),
 		CorrelationID: respCorrelationID,
 	}
 	for _, hook := range d.hooks {
@@ -718,6 +753,23 @@ func (d *Dispatcher) recordCircuitBreakerResult(routeKey string, statusCode int)
 	}
 }
 
+// isJSONContentType returns true if the Content-Type header indicates JSON.
+func isJSONContentType(ct string) bool {
+	return strings.Contains(ct, "application/json")
+}
+
+// cookieValue extracts the value of a named cookie from a Cookie header string.
+// Returns empty string if the cookie is not found.
+func cookieValue(cookieHeader, name string) string {
+	for _, c := range strings.Split(cookieHeader, ";") {
+		c = strings.TrimSpace(c)
+		if strings.HasPrefix(c, name+"=") {
+			return c[len(name)+1:]
+		}
+	}
+	return ""
+}
+
 // hasRequiredRole returns true if the caller holds at least one required role.
 func hasRequiredRole(callerRoles, requiredRoles []string) bool {
 	set := make(map[string]struct{}, len(callerRoles))
@@ -730,4 +782,27 @@ func hasRequiredRole(callerRoles, requiredRoles []string) bool {
 		}
 	}
 	return false
+}
+
+// bodyAnyToBytes converts the worker response body (any) to []byte.
+// Workers may send:
+//   - string   (Node.js SSR → HTML pages)
+//   - map/struct (Go/Python API → JSON objects)
+//   - []byte   (raw bytes)
+func bodyAnyToBytes(body any) []byte {
+	if body == nil {
+		return nil
+	}
+	switch v := body.(type) {
+	case string:
+		return []byte(v)
+	case []byte:
+		return v
+	default:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return []byte(fmt.Sprintf(`{"error":"failed to marshal body: %v"}`, err))
+		}
+		return b
+	}
 }

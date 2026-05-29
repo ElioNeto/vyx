@@ -52,7 +52,7 @@ func TestCorrelationID_WorkerEchoedID(t *testing.T) {
 	workerCid := uuid.NewString()
 	payload, _ := json.Marshal(dgw.WorkerResponse{
 		StatusCode:    200,
-		Body:          []byte(`{"ok":true}`),
+		Body:          `{"ok":true}`,
 		CorrelationID: workerCid,
 	})
 	transport := &mockTransport{
@@ -92,7 +92,7 @@ func TestCorrelationID_FallbackToRequestID(t *testing.T) {
 	// Worker omits correlation_id — old/unaware worker.
 	payload, _ := json.Marshal(dgw.WorkerResponse{
 		StatusCode: 200,
-		Body:       []byte(`{"ok":true}`),
+		Body:       `{"ok":true}`,
 	})
 	transport := &mockTransport{
 		resp: ipc.Message{Type: ipc.TypeResponse, Payload: payload},
@@ -130,7 +130,7 @@ func TestCorrelationID_GeneratedWhenAbsent(t *testing.T) {
 
 	payload, _ := json.Marshal(dgw.WorkerResponse{
 		StatusCode: 200,
-		Body:       []byte(`{"ok":true}`),
+		Body:       `{"ok":true}`,
 	})
 	transport := &mockTransport{
 		resp: ipc.Message{Type: ipc.TypeResponse, Payload: payload},

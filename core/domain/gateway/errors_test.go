@@ -207,7 +207,7 @@ func TestClaims_Struct(t *testing.T) {
 func TestWorkerResponse_Struct(t *testing.T) {
 	resp := &dgw.WorkerResponse{
 		StatusCode:    200,
-		Body:          []byte(`{"data":"test"}`),
+		Body:          `{"data":"test"}`,
 		CorrelationID: "worker-corr",
 	}
 	
