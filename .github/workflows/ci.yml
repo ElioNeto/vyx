@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     container: golang:1.25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v6
         with:
@@ -80,7 +80,7 @@ jobs:
     runs-on: ubuntu-latest
     container: python:3.12
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install, Lint & Test
         working-directory: packages/python
@@ -113,7 +113,7 @@ jobs:
     runs-on: ubuntu-latest
     container: golang:1.25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v6
         with:
@@ -127,7 +127,7 @@ jobs:
     runs-on: ubuntu-latest
     container: node:20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install & Lint
         working-directory: packages/worker
@@ -146,7 +146,7 @@ jobs:
     runs-on: ubuntu-latest
     container: golang:1.25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v6
         with:
@@ -165,7 +165,7 @@ jobs:
     runs-on: ubuntu-latest
     container: python:3.12
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install pip-audit & Run audit
         run: |
@@ -178,7 +178,7 @@ jobs:
     name: Security — Secrets (Gitleaks)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -196,7 +196,7 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Run Semgrep
         run: |
@@ -220,7 +220,7 @@ jobs:
     runs-on: ubuntu-latest
     container: golang:1.25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with:
           go-version: '1.25.9'
@@ -239,7 +239,7 @@ jobs:
     runs-on: ubuntu-latest
     container: golang:1.25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v6
         with:
@@ -259,7 +259,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v6
         with:
