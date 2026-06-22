@@ -13,7 +13,7 @@ jobs:
     container: golang:1.25
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Run in-process integration tests
         run: cd core && go test -v -count=1 -timeout=60s ./integration/...
