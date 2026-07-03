@@ -1,0 +1,34 @@
+{
+  "$schema": "https://raw.githubusercontent.com/ElioNeto/teamcode/main/schemas/teamcode.json",
+  "default_agent": "build",
+  "command": {
+    "dev": {
+      "description": "Run the application",
+      "template": "go run ."
+    },
+    "build": {
+      "description": "Build the project",
+      "template": "go build ./..."
+    },
+    "test": {
+      "description": "Run tests",
+      "template": "go test ./... -v"
+    },
+    "lint": {
+      "description": "Lint code",
+      "template": "golangci-lint run ./..."
+    }
+  },
+  "agent": {
+    "build": {
+      "description": "Default development agent"
+    }
+  },
+  "permission": {
+    "edit": "allow",
+    "bash": {
+      "go *": "allow",
+      "*": "ask"
+    }
+  }
+}
