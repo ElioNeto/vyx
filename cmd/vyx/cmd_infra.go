@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -34,6 +35,14 @@ func runInfra(args []string) {
 		runInfraApply(ctx, subArgs)
 	case "destroy":
 		runInfraDestroy(ctx, subArgs)
+	case "graph":
+		runInfraGraph(ctx, subArgs)
+	case "output":
+		runInfraOutput(ctx, subArgs)
+	case "import":
+		runInfraImport(ctx, subArgs)
+	case "state":
+		runInfraState(ctx, subArgs)
 	case "-h", "--help", "help":
 		fmt.Print(infraUsage)
 	default:
@@ -53,6 +62,10 @@ Commands:
   plan                   Show the plan (diff between desired and current state)
   apply                  Apply the planned changes
   destroy                Destroy all managed resources
+  graph                  Generate dependency graph (mermaid or dot format)
+  output                 Show output values from the state
+  import                 Import existing cloud resource into state
+  state                  Manage state (list, mv, rm, refresh)
 
 Global flags:
   --state-path=<path>    Path to the state file (default: .vyx/infra.tfstate)
@@ -308,4 +321,226 @@ func runInfraDestroy(ctx context.Context, args []string) {
 	}
 
 	fmt.Println("✓ All resources destroyed.")
+}
+
+// ─── vyx infra graph ────────────────────────────────────────────────────
+
+func runInfraGraph(ctx context.Context, args []string) {
+	fs := flag.NewFlagSet("infra graph", flag.ExitOnError)
+	format := fs.String("format", "mermaid", "Output format: mermaid or dot")
+	cfg := parseInfraFlags(fs, args)
+
+	orch, err := setupInfraOrchestrator(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := orch.Init(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "error: init failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	stack := createTestStack(cfg.stackName)
+
+	gen := infraapp.NewGraphGenerator()
+	result, err := gen.Generate(stack, infraapp.GraphFormat(*format))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: graph generation failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println(result)
+}
+
+// ─── vyx infra output ───────────────────────────────────────────────────
+
+func runInfraOutput(ctx context.Context, args []string) {
+	fs := flag.NewFlagSet("infra output", flag.ExitOnError)
+	formatJSON := fs.Bool("json", false, "Output in JSON format")
+	cfg := parseInfraFlags(fs, args)
+
+	orch, err := setupInfraOrchestrator(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := orch.Init(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "error: init failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	collector := infraapp.NewOutputCollector(orch.Backend())
+
+	// If a specific reference is given (e.g., "bucket.arn"), show just that.
+	if len(args) > 0 && args[0][0] != '-' {
+		ref := args[len(args)-1] // last arg is the reference
+		val, err := collector.GetOutput(ctx, ref)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println(val)
+		return
+	}
+
+	// Otherwise show all outputs.
+	entries, err := collector.AllOutputs(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if *formatJSON {
+		outputMap := make(map[string]map[string]string)
+		for _, e := range entries {
+			if outputMap[string(e.ResourceID)] == nil {
+				outputMap[string(e.ResourceID)] = make(map[string]string)
+			}
+			outputMap[string(e.ResourceID)][e.Name] = e.Value
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(outputMap)
+		return
+	}
+
+	if len(entries) == 0 {
+		fmt.Println("No outputs found.")
+		return
+	}
+
+	fmt.Println("Outputs:")
+	for _, e := range entries {
+		fmt.Printf("  %s.%s = %s\n", e.ResourceID, e.Name, e.Value)
+	}
+}
+
+// ─── vyx infra import ───────────────────────────────────────────────────
+
+func runInfraImport(ctx context.Context, args []string) {
+	fs := flag.NewFlagSet("infra import", flag.ExitOnError)
+	cfg := parseInfraFlags(fs, args)
+
+	if len(args) < 3 {
+		fmt.Fprint(os.Stderr, "usage: vyx infra import <resource_type> <resource_id> <cloud_id>\n")
+		fmt.Fprint(os.Stderr, "  resource_type  — e.g. aws_s3_bucket, aws_instance\n")
+		fmt.Fprint(os.Stderr, "  resource_id    — vyx identifier for the resource\n")
+		fmt.Fprint(os.Stderr, "  cloud_id       — provider-specific identifier (e.g. bucket name, instance ID)\n")
+		os.Exit(1)
+	}
+
+	resourceType := dinfra.ResourceType(args[len(args)-3])
+	resourceID := dinfra.ResourceID(args[len(args)-2])
+	cloudID := args[len(args)-1]
+
+	orch, err := setupInfraOrchestrator(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := orch.Init(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "error: init failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	importer := infraapp.NewImporter(orch.Registry(), orch.Backend())
+	result, err := importer.Import(ctx, resourceType, resourceID, cloudID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: import failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("✓ Imported %s %s (provider: %s, outputs: %d)\n",
+		result.ResourceType, result.ResourceID, result.ProviderName, result.OutputCount)
+}
+
+// ─── vyx infra state ────────────────────────────────────────────────────
+
+func runInfraState(ctx context.Context, args []string) {
+	if len(args) < 1 {
+		fmt.Fprint(os.Stderr, `vyx infra state — manage infrastructure state
+
+Usage:
+  vyx infra state list            List all resources in the state
+  vyx infra state mv <from> <to>  Rename a resource in the state
+  vyx infra state rm <id>         Remove a resource from the state
+  vyx infra state refresh         Refresh outputs from the cloud
+`)
+		os.Exit(1)
+	}
+
+	subcommand := args[0]
+	subArgs := args[1:]
+
+	fs := flag.NewFlagSet("infra state "+subcommand, flag.ExitOnError)
+	cfg := parseInfraFlags(fs, subArgs)
+
+	orch, err := setupInfraOrchestrator(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := orch.Init(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "error: init failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	sm := infraapp.NewStateManager(orch.Backend())
+
+	switch subcommand {
+	case "list":
+		resources, err := sm.ListResources(ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		if len(resources) == 0 {
+			fmt.Println("No resources in state.")
+			return
+		}
+		fmt.Printf("Resources in state (%d):\n", len(resources))
+		for _, r := range resources {
+			fmt.Printf("  %s [%s] provider=%s state=%s\n", r.ID, r.Type, r.ProviderName, r.State)
+		}
+
+	case "mv":
+		if len(subArgs) < 2 {
+			fmt.Fprint(os.Stderr, "usage: vyx infra state mv <from> <to>\n")
+			os.Exit(1)
+		}
+		from := dinfra.ResourceID(subArgs[len(subArgs)-2])
+		to := dinfra.ResourceID(subArgs[len(subArgs)-1])
+		if err := sm.MoveResource(ctx, from, to); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("✓ Moved %s → %s\n", from, to)
+
+	case "rm":
+		if len(subArgs) < 1 {
+			fmt.Fprint(os.Stderr, "usage: vyx infra state rm <resource_id>\n")
+			os.Exit(1)
+		}
+		id := dinfra.ResourceID(subArgs[len(subArgs)-1])
+		if err := sm.RemoveResource(ctx, id); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("✓ Removed %s from state\n", id)
+
+	case "refresh":
+		if err := sm.Refresh(ctx, orch.Registry()); err != nil {
+			fmt.Fprintf(os.Stderr, "error: refresh failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("✓ State refreshed")
+
+	default:
+		fmt.Fprintf(os.Stderr, "error: unknown state subcommand %q\n", subcommand)
+		os.Exit(1)
+	}
 }

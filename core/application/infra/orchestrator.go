@@ -64,6 +64,16 @@ func (o *Orchestrator) RegisterProvider(p infra.Provider) error {
 	return o.registry.Register(p)
 }
 
+// Backend returns the state backend used by this orchestrator.
+func (o *Orchestrator) Backend() infra.Backend {
+	return o.backend
+}
+
+// Registry returns the provider registry used by this orchestrator.
+func (o *Orchestrator) Registry() infra.ProviderRegistry {
+	return o.registry
+}
+
 // ListProviders returns all registered provider IDs.
 func (o *Orchestrator) ListProviders() []infra.ProviderID {
 	return o.registry.List()

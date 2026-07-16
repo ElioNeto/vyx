@@ -268,11 +268,17 @@ func (m *MockProvider) Create(_ context.Context, r *Resource) (*Resource, error)
 }
 
 func (m *MockProvider) Read(_ context.Context, r *Resource) (*Resource, error) {
-	existing, ok := m.resources[r.ID]
-	if !ok {
-		return nil, &ErrResourceNotFound{ResourceID: r.ID}
+	// First try direct ID lookup.
+	if existing, ok := m.resources[r.ID]; ok {
+		return existing.Clone(), nil
 	}
-	return existing.Clone(), nil
+	// Then try looking up by "id" property (used by Importer).
+	if cloudID, ok := r.Properties["id"].(string); ok {
+		if existing, ok := m.resources[ResourceID(cloudID)]; ok {
+			return existing.Clone(), nil
+		}
+	}
+	return nil, &ErrResourceNotFound{ResourceID: r.ID}
 }
 
 func (m *MockProvider) Update(_ context.Context, desired, current *Resource) (*Resource, error) {

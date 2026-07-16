@@ -20,8 +20,19 @@ func NewBackend(cfg infra.BackendConfig) (infra.Backend, error) {
 		return newS3Backend(cfg)
 
 	case "consul":
-		// Consul backend will be implemented in Phase 3.
-		return nil, fmt.Errorf("consul backend not yet implemented — use local backend")
+		addr := "http://localhost:8500"
+		if v, ok := cfg.Config["address"].(string); ok && v != "" {
+			addr = v
+		}
+		path := "vyx/infra/tfstate"
+		if v, ok := cfg.Config["path"].(string); ok && v != "" {
+			path = v
+		}
+		return NewConsulBackend(ConsulBackendConfig{
+			Addr:       addr,
+			Path:       path,
+			Datacenter: getString(cfg.Config, "datacenter"),
+		})
 
 	case "http":
 		// HTTP backend will be implemented in Phase 4.
@@ -30,6 +41,14 @@ func NewBackend(cfg infra.BackendConfig) (infra.Backend, error) {
 	default:
 		return nil, fmt.Errorf("unknown backend type %q", cfg.Type)
 	}
+}
+
+// getString retrieves a string value from a map with a type assertion.
+func getString(m map[string]any, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
 }
 
 
