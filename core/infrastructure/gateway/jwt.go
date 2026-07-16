@@ -41,6 +41,8 @@ func (v *JWTValidator) Validate(tokenStr string) (*dgw.Claims, error) {
 		UserID string   `json:"sub"`
 		Roles  []string `json:"roles"`
 		jwt.RegisteredClaims
+		// Support both "sub" and "user_id" claim names for compatibility
+		UserIDCustom string `json:"user_id"`
 	}
 
 	token, err := jwt.ParseWithClaims(tokenStr, &vyxClaims{}, func(t *jwt.Token) (any, error) {
@@ -75,8 +77,14 @@ func (v *JWTValidator) Validate(tokenStr string) (*dgw.Claims, error) {
 		return nil, dgw.ErrUnauthorized
 	}
 
+	// Use "sub" first, fall back to "user_id" custom claim
+	userID := c.UserID
+	if userID == "" {
+		userID = c.UserIDCustom
+	}
+
 	return &dgw.Claims{
-		UserID: c.UserID,
+		UserID: userID,
 		Roles:  c.Roles,
 	}, nil
 }

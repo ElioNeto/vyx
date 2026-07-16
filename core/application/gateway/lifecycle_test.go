@@ -125,7 +125,7 @@ func TestLifecycleHooks_Ordering(t *testing.T) {
 
 	payload, _ := json.Marshal(dgw.WorkerResponse{
 		StatusCode: 200,
-		Body:       []byte(`{"ok":true}`),
+		Body:       `{"ok":true}`,
 	})
 	transport := &mockTransport{
 		respMsg: ipc.Message{Payload: payload},
@@ -357,7 +357,7 @@ func TestLifecycleHooks_MultipleHooks_Success(t *testing.T) {
 
 	payload, _ := json.Marshal(dgw.WorkerResponse{
 		StatusCode: 200,
-		Body:       []byte(`{"data":"test","transformed":true}`),
+		Body:       `{"data":"test","transformed":true}`,
 	})
 	transport := &mockTransport{
 		respMsg: ipc.Message{Payload: payload},

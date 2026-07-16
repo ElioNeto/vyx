@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 )
 
 func runAnnotate(args []string) {
@@ -28,36 +29,47 @@ func runBuildAnnotate(goDir, tsDir, frontendDir, output string) error {
 }
 
 // runAnnotateCmd delegates annotation scanning to the cmd/annotate binary.
-// It first looks for a pre-installed `vyx-annotate` on PATH, then falls back
-// to `go run` so no separate install is required during development.
 func runAnnotateCmd(goDir, tsDir, frontendDir, output string) error {
+	// Make all paths absolute so they resolve correctly when the annotate
+	// binary runs from the vyx source directory.
+	absGo, _ := filepath.Abs(goDir)
+	absTs, _ := filepath.Abs(tsDir)
+	absFrontend, _ := filepath.Abs(frontendDir)
+	absOutput, _ := filepath.Abs(output)
+
 	// Try installed binary first.
 	path, err := exec.LookPath("vyx-annotate")
 	if err != nil {
-		// Fall back to go run relative to the project root.
-		// vyx is always run from the project root, so ../../ is not correct here;
-		// the annotate cmd lives at <repo>/cmd/annotate relative to the repo root.
-		// We resolve it relative to the vyx binary location.
 		path = ""
 	}
 
 	var cmd *exec.Cmd
 	if path != "" {
 		cmd = exec.Command(path,
-			"-go", goDir,
-			"-ts", tsDir,
-			"-frontend", frontendDir,
-			"-output", output,
+			"-go", absGo,
+			"-ts", absTs,
+			"-frontend", absFrontend,
+			"-output", absOutput,
 		)
 	} else {
-		// Locate cmd/annotate relative to the working directory (project root).
-		annotatePkg := findAnnotatePkg()
-		cmd = exec.Command("go", "run", annotatePkg,
-			"-go", goDir,
-			"-ts", tsDir,
-			"-frontend", frontendDir,
-			"-output", output,
-		)
+		// Locate cmd/annotate using the vyx source directory.
+		annotatePkg, vyxSrc := findAnnotatePkg()
+		if vyxSrc != "" {
+			cmd = exec.Command("go", "run", annotatePkg,
+				"-go", absGo,
+				"-ts", absTs,
+				"-frontend", absFrontend,
+				"-output", absOutput,
+			)
+			cmd.Dir = vyxSrc
+		} else {
+			cmd = exec.Command("go", "run", annotatePkg,
+				"-go", absGo,
+				"-ts", absTs,
+				"-frontend", absFrontend,
+				"-output", absOutput,
+			)
+		}
 	}
 
 	cmd.Stdout = os.Stdout
@@ -65,15 +77,21 @@ func runAnnotateCmd(goDir, tsDir, frontendDir, output string) error {
 	return cmd.Run()
 }
 
-// findAnnotatePkg returns the Go package path for cmd/annotate.
-// When running from a vyx project root (scaffolded by vyx new), the
-// repo is not present locally — so we try the installed module path.
-func findAnnotatePkg() string {
+// findAnnotatePkg returns the Go package path for cmd/annotate
+// and the vyx source directory to run it from.
+func findAnnotatePkg() (pkg, srcDir string) {
 	// Check if the annotate package exists locally (monorepo / dev setup).
 	if _, err := os.Stat("cmd/annotate/main.go"); err == nil {
-		return "./cmd/annotate"
+		return "./cmd/annotate", ""
 	}
-	return "github.com/ElioNeto/vyx/cmd/annotate"
+	// Try to find vyx source directory.
+	srcDir = findVyxSource()
+	if srcDir != "" {
+		if _, err := os.Stat(filepath.Join(srcDir, "cmd", "annotate", "main.go")); err == nil {
+			return "./cmd/annotate", srcDir
+		}
+	}
+	return "github.com/ElioNeto/vyx/cmd/annotate", srcDir
 }
 
 // runCommand is a shared helper to exec a process and stream its output.

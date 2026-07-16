@@ -117,7 +117,7 @@ func (t *slowTransport) Send(_ context.Context, _ string, _ ipc.Message) error {
 	return nil
 }
 func (t *slowTransport) ReceiveResponse(_ context.Context, _ string) (ipc.Message, error) {
-	body, _ := json.Marshal(dgw.WorkerResponse{StatusCode: 200, Body: []byte(`{"ok":true}`)})
+	body, _ := json.Marshal(dgw.WorkerResponse{StatusCode: 200, Body: `{"ok":true}`})
 	return ipc.Message{Type: ipc.TypeResponse, Payload: body}, nil
 }
 func (t *slowTransport) Receive(_ context.Context, _ string) (ipc.Message, error) {

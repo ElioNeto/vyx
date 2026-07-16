@@ -1,0 +1,49 @@
+{
+  "$schema": "https://raw.githubusercontent.com/ElioNeto/teamcode/main/schemas/teamcode.json",
+  "default_agent": "god",
+  "command": {
+    "dev": {
+      "description": "Run the application",
+      "template": "go run ."
+    },
+    "build": {
+      "description": "Build the project",
+      "template": "go build ./..."
+    },
+    "test": {
+      "description": "Run tests",
+      "template": "go test ./... -v"
+    },
+    "lint": {
+      "description": "Lint code",
+      "template": "golangci-lint run ./..."
+    }
+  },
+  "agent": {
+    "god": {
+      "description": "Omnipotent agent with unrestricted access to all tools and permissions",
+      "permission": {
+        "edit": "allow",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "bash": "allow",
+        "task": "allow",
+        "external_directory": "allow",
+        "question": "deny",
+        "webfetch": "allow"
+      }
+    },
+    "build": {
+      "description": "Default development agent"
+    }
+  },
+  "permission": {
+    "edit": "allow",
+    "bash": {
+      "go *": "allow",
+      "*": "ask"
+    }
+  }
+}

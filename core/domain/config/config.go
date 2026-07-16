@@ -6,15 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/ElioNeto/vyx/core/domain/infra"
 )
 
 // Config is the top-level representation of vyx.yaml.
 type Config struct {
-	Project  ProjectConfig  `yaml:"project"`
-	Workers  []WorkerConfig `yaml:"workers"`
-	Security SecurityConfig `yaml:"security"`
-	IPC      IPCConfig      `yaml:"ipc"`
-	Build    BuildConfig    `yaml:"build"`
+	Project  ProjectConfig     `yaml:"project"`
+	Workers  []WorkerConfig    `yaml:"workers"`
+	Security SecurityConfig    `yaml:"security"`
+	IPC      IPCConfig         `yaml:"ipc"`
+	Build    BuildConfig       `yaml:"build"`
+	Infra    *infra.InfraConfig `yaml:"infrastructure,omitempty"`
 }
 
 // ProjectConfig holds project metadata.
@@ -98,6 +101,7 @@ func Defaults() Config {
 			SchemasDir:     "./schemas",
 			RouteMapOutput: "./route_map.json",
 		},
+		Infra: infraPtr(infra.DefaultInfraConfig()),
 	}
 }
 
@@ -117,6 +121,10 @@ func (c *Config) Validate() error {
 	}
 
 	if err := c.validateSecurity(); err != nil {
+		errs = append(errs, err)
+	}
+
+	if err := c.validateInfrastructure(); err != nil {
 		errs = append(errs, err)
 	}
 
@@ -179,4 +187,16 @@ func (c *Config) validateSecurity() error {
 		return nil
 	}
 	return errors.Join(errs...)
+}
+
+func (c *Config) validateInfrastructure() error {
+	if c.Infra == nil {
+		return nil // infrastructure is optional
+	}
+	return c.Infra.Validate()
+}
+
+// infraPtr is a helper to get a pointer to an InfraConfig value.
+func infraPtr(cfg infra.InfraConfig) *infra.InfraConfig {
+	return &cfg
 }

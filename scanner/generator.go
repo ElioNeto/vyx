@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -20,6 +21,7 @@ type RouteMap struct {
 //	tsDir       — directory containing TypeScript/JS backend files (may be empty)
 //	pyDir       — directory containing Python backend files with @Route annotations (may be empty)
 //	frontendDir — directory containing React TSX files with @Page/@Auth annotations (#16)
+//	infraDir    — directory containing infrastructure resource definitions (may be empty)
 //	outputPath  — file path where route_map.json will be written
 func Generate(goDir, tsDir, pyDir, frontendDir, outputPath string) ([]AnnotationError, error) {
 	var allRoutes []Route
@@ -71,4 +73,33 @@ func Generate(goDir, tsDir, pyDir, frontendDir, outputPath string) ([]Annotation
 	}
 
 	return nil, os.WriteFile(outputPath, data, 0644)
+}
+
+// GenerateInfra scans infrastructure directories and writes infra_map.json.
+// Ignores errors from individual parsers and reports all annotation errors.
+func GenerateInfra(infraDir, outputPath string) ([]AnnotationError, error) {
+	if infraDir == "" {
+		return nil, nil // infra scanning is optional
+	}
+
+	resources, errs := ParseInfraFiles(infraDir)
+
+	infraMap := InfraResourceMap{
+		Resources: resources,
+	}
+
+	data, err := json.MarshalIndent(infraMap, "", "  ")
+	if err != nil {
+		return errs, fmt.Errorf("marshal infra_map.json: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+		return errs, fmt.Errorf("create infra_map output dir: %w", err)
+	}
+
+	if err := os.WriteFile(outputPath, data, 0644); err != nil {
+		return errs, fmt.Errorf("write infra_map.json: %w", err)
+	}
+
+	return errs, nil
 }

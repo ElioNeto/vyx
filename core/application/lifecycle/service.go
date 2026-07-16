@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/ElioNeto/vyx/core/domain/ipc"
@@ -89,7 +90,14 @@ func (s *Service) SpawnWorkerWithReplicas(ctx context.Context, cfg SpawnWorkerCo
 		if err != nil {
 			return nil, fmt.Errorf("resolve runtime: %w", err)
 		}
-		cfg.Command = resolvedPath + " " + cfg.Command
+		// Replace the binary name with the resolved path, keeping existing args.
+		parts := strings.Fields(cfg.Command)
+		if len(parts) > 0 {
+			parts[0] = resolvedPath
+			cfg.Command = strings.Join(parts, " ")
+		} else {
+			cfg.Command = resolvedPath
+		}
 	}
 
 	w := &worker.Worker{
@@ -284,6 +292,11 @@ func (s *Service) MarkRunning(ctx context.Context, id string) error {
 	w.UpdatedAt = time.Now()
 	s.publish(ctx, worker.EventRunning, w, "handshake complete")
 	return s.repo.Save(ctx, w)
+}
+
+// GetWorker retrieves a worker by ID from the repository.
+func (s *Service) GetWorker(ctx context.Context, id string) (*worker.Worker, error) {
+	return s.repo.FindByID(ctx, id)
 }
 
 // RestartWorker stops and re-spawns a worker (called by the monitor after backoff).
