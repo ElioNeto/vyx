@@ -45,6 +45,8 @@ func main() {
 		runBuild(os.Args[2:])
 	case "annotate":
 		runAnnotate(os.Args[2:])
+	case "infra":
+		runInfra(os.Args[2:])
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 	default:
