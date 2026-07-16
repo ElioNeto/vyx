@@ -12,6 +12,7 @@ import (
 	infraapp "github.com/ElioNeto/vyx/core/application/infra"
 	dinfra "github.com/ElioNeto/vyx/core/domain/infra"
 	"github.com/ElioNeto/vyx/core/infrastructure/infra/state"
+	"github.com/ElioNeto/vyx/core/infrastructure/infra/templater"
 )
 
 func runInfra(args []string) {
@@ -43,6 +44,8 @@ func runInfra(args []string) {
 		runInfraImport(ctx, subArgs)
 	case "state":
 		runInfraState(ctx, subArgs)
+	case "export":
+		runInfraExport(ctx, subArgs)
 	case "-h", "--help", "help":
 		fmt.Print(infraUsage)
 	default:
@@ -66,6 +69,7 @@ Commands:
   output                 Show output values from the state
   import                 Import existing cloud resource into state
   state                  Manage state (list, mv, rm, refresh)
+  export                 Export to Terraform HCL or CloudFormation
 
 Global flags:
   --state-path=<path>    Path to the state file (default: .vyx/infra.tfstate)
@@ -541,6 +545,56 @@ Usage:
 
 	default:
 		fmt.Fprintf(os.Stderr, "error: unknown state subcommand %q\n", subcommand)
+		os.Exit(1)
+	}
+}
+
+// ─── vyx infra export ───────────────────────────────────────────────────
+
+func runInfraExport(ctx context.Context, args []string) {
+	fs := flag.NewFlagSet("infra export", flag.ExitOnError)
+	format := fs.String("format", "terraform", "Export format: terraform or cloudformation")
+	output := fs.String("output", "", "Output file path (default: stdout)")
+	region := fs.String("region", "us-east-1", "AWS region for Terraform provider")
+	cfg := parseInfraFlags(fs, args)
+
+	stack := createTestStack(cfg.stackName)
+
+	switch *format {
+	case "terraform", "tf":
+		result, err := templater.ExportTerraform(stack, *region)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: export failed: %v\n", err)
+			os.Exit(1)
+		}
+		if *output != "" {
+			if err := os.WriteFile(*output, []byte(result), 0644); err != nil {
+				fmt.Fprintf(os.Stderr, "error: write %s: %v\n", *output, err)
+				os.Exit(1)
+			}
+			fmt.Printf("✓ Terraform HCL written to %s\n", *output)
+		} else {
+			fmt.Print(result)
+		}
+
+	case "cloudformation", "cfn":
+		result, err := templater.ExportCloudFormation(stack)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: export failed: %v\n", err)
+			os.Exit(1)
+		}
+		if *output != "" {
+			if err := os.WriteFile(*output, []byte(result), 0644); err != nil {
+				fmt.Fprintf(os.Stderr, "error: write %s: %v\n", *output, err)
+				os.Exit(1)
+			}
+			fmt.Printf("✓ CloudFormation template written to %s\n", *output)
+		} else {
+			fmt.Print(result)
+		}
+
+	default:
+		fmt.Fprintf(os.Stderr, "error: unsupported format %q (use 'terraform' or 'cloudformation')\n", *format)
 		os.Exit(1)
 	}
 }
