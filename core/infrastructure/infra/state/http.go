@@ -60,13 +60,16 @@ func (b *HTTPBackend) do(method, path string, body any) (*http.Response, error) 
 	return b.client.Do(req)
 }
 
-// Init does nothing for HTTP backend — the server must already be running.
+// Init checks that the HTTP backend is reachable and healthy.
 func (b *HTTPBackend) Init(ctx context.Context) error {
 	resp, err := b.do(http.MethodGet, "/health", nil)
 	if err != nil {
 		return fmt.Errorf("http backend: health check failed: %w", err)
 	}
 	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("http backend: health check returned status %d", resp.StatusCode)
+	}
 	return nil
 }
 

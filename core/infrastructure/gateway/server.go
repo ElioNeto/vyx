@@ -259,6 +259,18 @@ func (s *Server) checkMethod(w http.ResponseWriter, r *http.Request) bool {
 
 // handle is the single entry-point handler for regular HTTP requests.
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			s.log.Error("http handler panic",
+				zap.Any("panic", rec),
+				zap.String("method", r.Method),
+				zap.String("path", r.URL.Path),
+				zap.Stack("stack"),
+			)
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+		}
+	}()
+
 	if isWebSocketUpgrade(r) {
 		s.wsProxy.ServeHTTP(w, r)
 		return

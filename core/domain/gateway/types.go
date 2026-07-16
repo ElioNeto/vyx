@@ -2,8 +2,8 @@ package gateway
 
 // Claims holds the verified payload extracted from a JWT.
 type Claims struct {
-	UserID string
-	Roles  []string
+	UserID string   `json:"user_id"`
+	Roles  []string `json:"roles"`
 }
 
 // GatewayRequest is the normalised, transport-agnostic request passed

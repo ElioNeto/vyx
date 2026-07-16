@@ -35,8 +35,14 @@ func NewBackend(cfg infra.BackendConfig) (infra.Backend, error) {
 		})
 
 	case "http":
-		// HTTP backend will be implemented in Phase 4.
-		return nil, fmt.Errorf("http backend not yet implemented — use local backend")
+		addr := ""
+		if v, ok := cfg.Config["address"].(string); ok && v != "" {
+			addr = v
+		}
+		if addr == "" {
+			return nil, fmt.Errorf("http backend: address is required")
+		}
+		return NewHTTPBackend(HTTPBackendConfig{Addr: addr}), nil
 
 	default:
 		return nil, fmt.Errorf("unknown backend type %q", cfg.Type)

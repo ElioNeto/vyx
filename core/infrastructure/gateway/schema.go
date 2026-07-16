@@ -72,7 +72,10 @@ func (v *SchemaValidator) InvalidateCache() {
 
 // Validate validates body against the JSON Schema named schemaName.
 func (v *SchemaValidator) Validate(schemaName string, body []byte) error {
-	schema, err := v.getSchema(schemaName)
+	if v == nil {
+		return fmt.Errorf("schema: validator not initialized")
+	}
+	schema, err := v.getSchema(sanitizeSchemaName(schemaName))
 	if err != nil {
 		return err
 	}
@@ -86,6 +89,22 @@ func (v *SchemaValidator) Validate(schemaName string, body []byte) error {
 		return toValidationError(err)
 	}
 	return nil
+}
+
+// sanitizeSchemaName extracts the schema name from annotation formats.
+// Handles formats like:
+//
+//	@Validate(JsonSchema: "register")    → "register"
+//	@Validate(pydantic)                   → "pydantic"
+//	@Validate(JsonSchema: "create_user") → "create_user"
+func sanitizeSchemaName(name string) string {
+	// Strip JsonSchema: prefix if present
+	if len(name) > 11 && name[:11] == "JsonSchema:" {
+		name = strings.TrimSpace(name[11:])
+		// Remove surrounding quotes
+		name = strings.Trim(name, "\"'")
+	}
+	return strings.TrimSpace(name)
 }
 
 // getSchema retrieves a compiled schema from cache, compiling it on first access.

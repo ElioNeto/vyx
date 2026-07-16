@@ -5,6 +5,7 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 
@@ -12,7 +13,14 @@ import (
 )
 
 func main() {
-	os.Exit(runMainWithExit("backend/go", "backend/node", "backend/python", "frontend/src", "route_map.json"))
+	goDir := flag.String("go", "backend/go", "Directory containing Go source files")
+	tsDir := flag.String("ts", "backend/node", "Directory containing TypeScript source files")
+	pyDir := flag.String("py", "backend/python", "Directory containing Python source files")
+	frontendDir := flag.String("frontend", "frontend/src", "Directory containing React/TSX frontend files")
+	output := flag.String("output", "route_map.json", "Output path for the generated route map")
+	flag.Parse()
+
+	os.Exit(runMainWithExit(*goDir, *tsDir, *pyDir, *frontendDir, *output))
 }
 
 // runMainWithExit contains the main logic and returns an exit code for testability.

@@ -20,9 +20,11 @@ Usage:
 
 Commands:
   new project <name>   Scaffold a new vyx project in ./<name>/
-  dev                  Start the core in development mode (hot reload)
+  install              Install dependencies for all workers
+  dev                  Start the core and workers in development mode
   build                Run the annotation scanner and build all artefacts
   annotate             Validate annotations and print the route map to stdout
+  infra                Manage cloud infrastructure (plan, apply, destroy, etc.)
 
 Flags:
   -h, --help           Show this help message
@@ -39,6 +41,8 @@ func main() {
 	switch os.Args[1] {
 	case "new":
 		runNew(os.Args[2:])
+	case "install":
+		runInstall(os.Args[2:])
 	case "dev":
 		runDev(os.Args[2:])
 	case "build":

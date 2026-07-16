@@ -173,6 +173,12 @@ export interface WorkerOptions {
 }
 
 export function getSocketPath(options: WorkerOptions): string {
+  // Check for --vyx-socket from command line (set by core when spawning worker)
+  const vyxSocketIndex = process.argv.indexOf('--vyx-socket');
+  if (vyxSocketIndex >= 0 && vyxSocketIndex < process.argv.length - 1) {
+    return process.argv[vyxSocketIndex + 1];
+  }
+
   return (
     options.socketPath ??
     (process.platform === 'win32'

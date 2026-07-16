@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/ElioNeto/vyx/core/domain/ipc"
@@ -89,7 +90,14 @@ func (s *Service) SpawnWorkerWithReplicas(ctx context.Context, cfg SpawnWorkerCo
 		if err != nil {
 			return nil, fmt.Errorf("resolve runtime: %w", err)
 		}
-		cfg.Command = resolvedPath + " " + cfg.Command
+		// Replace the binary name with the resolved path, keeping existing args.
+		parts := strings.Fields(cfg.Command)
+		if len(parts) > 0 {
+			parts[0] = resolvedPath
+			cfg.Command = strings.Join(parts, " ")
+		} else {
+			cfg.Command = resolvedPath
+		}
 	}
 
 	w := &worker.Worker{

@@ -399,8 +399,8 @@ func (d *Dispatcher) validateJWT(ctx context.Context, req *dgw.GatewayRequest, r
 		token = cookieValue(req.Headers["Cookie"], "vyx_token")
 	}
 	if token == "" {
-		// If the route allows "guest" role, treat unauthenticated requests as guest.
-		if hasRole(route.AuthRoles, "guest") {
+		// If the route allows "guest" or "public" role, treat unauthenticated requests as such.
+		if hasRole(route.AuthRoles, "guest") || hasRole(route.AuthRoles, "public") {
 			req.Claims = &dgw.Claims{Roles: []string{"guest"}}
 			return nil, true
 		}

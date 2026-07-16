@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 
 	"github.com/ElioNeto/vyx/scanner"
 )
@@ -47,7 +48,18 @@ func runBuild(args []string) {
 
 	fmt.Println("\U0001f527 Building core binary...")
 
-	if err := runCommand("go", "build", "-buildvcs=false", "-o", ".vyx/core", "github.com/ElioNeto/vyx/core/cmd/vyx"); err != nil {
+	// Build the core from the vyx source directory.
+	vyxSrc := findVyxSource()
+	if vyxSrc == "" {
+		fmt.Fprintln(os.Stderr, "error: could not find vyx source directory (set VYX_SRC env var)")
+		os.Exit(1)
+	}
+	coreOut := ".vyx/core"
+	build := exec.Command("go", "build", "-buildvcs=false", "-o", coreOut, "github.com/ElioNeto/vyx/core/cmd/vyx")
+	build.Dir = vyxSrc
+	build.Stdout = os.Stdout
+	build.Stderr = os.Stderr
+	if err := build.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: go build failed: %v\n", err)
 		os.Exit(1)
 	}

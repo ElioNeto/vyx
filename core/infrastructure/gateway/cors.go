@@ -16,10 +16,11 @@ type CORSConfig struct {
 	AllowCredentials bool
 }
 
-// DefaultCORSConfig returns a safe default CORS config (same-origin only).
+// DefaultCORSConfig returns a safe default CORS config allowing
+// common development origins. In production, configure specific origins.
 func DefaultCORSConfig() CORSConfig {
 	return CORSConfig{
-		AllowedOrigins:   []string{}, // empty = same-origin only
+		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Content-Type", "Authorization", "X-Request-Id", "X-Correlation-Id"},
 		ExposeHeaders:    []string{"X-Request-Id", "X-Correlation-Id", "X-RateLimit-Remaining", "X-RateLimit-Reset"},

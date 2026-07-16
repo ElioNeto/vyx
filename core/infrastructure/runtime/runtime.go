@@ -122,6 +122,28 @@ func Ensure(ctx context.Context, rt Runtime, version, vyxDir string, logger func
 }
 
 func ensureNode(ctx context.Context, version, vyxDir string, logger func(string)) error {
+	// First, check if node is already available on the system PATH.
+	if nodePath, err := exec.LookPath("node"); err == nil {
+		// Check version if specified.
+		if version == "" || version == "latest" {
+			if logger != nil {
+				logger(fmt.Sprintf("✅ Node.js found at %s (system)", nodePath))
+			}
+			return nil
+		}
+		// Try to verify version.
+		verCmd := exec.Command(nodePath, "--version")
+		verOut, err := verCmd.Output()
+		if err == nil {
+			systemVer := strings.TrimSpace(string(verOut))
+			if logger != nil {
+				logger(fmt.Sprintf("✅ Node.js %s found at %s (system)", systemVer, nodePath))
+			}
+			return nil
+		}
+	}
+
+	// Node not on PATH — download fnm to manage Node versions.
 	runtimesDir := filepath.Join(vyxDir, "runtimes")
 	fnmDir := filepath.Join(runtimesDir, "fnm")
 	nodeDir := filepath.Join(runtimesDir, "node")
@@ -234,14 +256,25 @@ func Resolve(rt Runtime, vyxDir string) (string, error) {
 	case RuntimeNode:
 		matches, err := filepath.Glob(filepath.Join(runtimesDir, "node", "v*", "bin", "node"))
 		if err != nil || len(matches) == 0 {
-			return "", fmt.Errorf("node not installed in %s", filepath.Join(runtimesDir, "node"))
+			// Fall back to system node on PATH
+			if nodePath, lookErr := exec.LookPath("node"); lookErr == nil {
+				return nodePath, nil
+			}
+			return "", fmt.Errorf("node not installed in %s (and not found on PATH)", filepath.Join(runtimesDir, "node"))
 		}
 		return matches[0], nil
 
 	case RuntimePython:
 		matches, err := filepath.Glob(filepath.Join(runtimesDir, "python", "cpython-*", "bin", "python3"))
 		if err != nil || len(matches) == 0 {
-			return "", fmt.Errorf("python not installed in %s", filepath.Join(runtimesDir, "python"))
+			// Fall back to system python on PATH
+			if pythonPath, lookErr := exec.LookPath("python3"); lookErr == nil {
+				return pythonPath, nil
+			}
+			if pythonPath, lookErr := exec.LookPath("python"); lookErr == nil {
+				return pythonPath, nil
+			}
+			return "", fmt.Errorf("python not installed in %s (and not found on PATH)", filepath.Join(runtimesDir, "python"))
 		}
 		return matches[0], nil
 
