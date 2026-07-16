@@ -83,28 +83,30 @@ Run 'vyx infra <command> -help' for command-specific flags.
 type infraConfig struct {
 	statePath string
 	stackName string
+	projectDir string
 }
 
 func parseInfraFlags(fs *flag.FlagSet, args []string) infraConfig {
 	cfg := infraConfig{
-		statePath: ".vyx/infra.tfstate",
-		stackName: "default",
+		statePath:  ".vyx/infra.tfstate",
+		stackName:  "default",
+		projectDir: ".",
 	}
 	fs.StringVar(&cfg.statePath, "state-path", ".vyx/infra.tfstate", "Path to the state file")
 	fs.StringVar(&cfg.stackName, "stack", "default", "Stack name")
+	fs.StringVar(&cfg.projectDir, "dir", ".", "Project root directory")
 	_ = fs.Parse(args)
 	return cfg
 }
 
 func setupInfraOrchestrator(cfg infraConfig) (*infraapp.Orchestrator, error) {
-	// Registry with mock provider for Phase 1.
+	// Registry with providers wired via build tags
 	reg := dinfra.NewProviderRegistry()
-	mock := dinfra.NewMockProvider("mock")
-	if err := reg.Register(mock); err != nil {
-		return nil, fmt.Errorf("register mock provider: %w", err)
+	if err := registerProviders(reg, nil); err != nil {
+		return nil, fmt.Errorf("register providers: %w", err)
 	}
 
-	// Local state backend.
+	// State backend — use factory for proper config
 	backend, err := state.NewLocalBackend(cfg.statePath)
 	if err != nil {
 		return nil, fmt.Errorf("create backend: %w", err)
@@ -117,6 +119,18 @@ func setupInfraOrchestrator(cfg infraConfig) (*infraapp.Orchestrator, error) {
 		backend,
 		reg,
 	), nil
+}
+
+// loadStack loads the stack from infra_map.json or vyx.yaml.
+func loadStack(cfg infraConfig) *dinfra.Stack {
+	loader := infraapp.NewStackLoader(cfg.projectDir)
+	stack, err := loader.LoadStack(cfg.stackName)
+	if err != nil {
+		// If loading fails, fall back to empty stack
+		fmt.Fprintf(os.Stderr, "warning: could not load stack: %v\n", err)
+		return dinfra.NewStack(cfg.stackName)
+	}
+	return stack
 }
 
 func createTestStack(name string) *dinfra.Stack {
@@ -173,7 +187,7 @@ func runInfraPlan(ctx context.Context, args []string) {
 		os.Exit(1)
 	}
 
-	stack := createTestStack(cfg.stackName)
+	stack := loadStack(cfg)
 	plan, err := orch.Plan(ctx, stack)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: plan failed: %v\n", err)
@@ -215,7 +229,7 @@ func runInfraApply(ctx context.Context, args []string) {
 		os.Exit(1)
 	}
 
-	stack := createTestStack(cfg.stackName)
+	stack := loadStack(cfg)
 
 	// Acquire lock.
 	if err := orch.AcquireLock(ctx, "apply"); err != nil {
@@ -318,7 +332,7 @@ func runInfraDestroy(ctx context.Context, args []string) {
 		}
 	}
 
-	stack := createTestStack(cfg.stackName)
+	stack := loadStack(cfg)
 	if err := orch.Destroy(ctx, stack); err != nil {
 		fmt.Fprintf(os.Stderr, "error: destroy failed: %v\n", err)
 		os.Exit(1)
@@ -345,7 +359,7 @@ func runInfraGraph(ctx context.Context, args []string) {
 		os.Exit(1)
 	}
 
-	stack := createTestStack(cfg.stackName)
+	stack := loadStack(cfg)
 
 	gen := infraapp.NewGraphGenerator()
 	result, err := gen.Generate(stack, infraapp.GraphFormat(*format))
@@ -558,7 +572,7 @@ func runInfraExport(ctx context.Context, args []string) {
 	region := fs.String("region", "us-east-1", "AWS region for Terraform provider")
 	cfg := parseInfraFlags(fs, args)
 
-	stack := createTestStack(cfg.stackName)
+	stack := loadStack(cfg)
 
 	switch *format {
 	case "terraform", "tf":
