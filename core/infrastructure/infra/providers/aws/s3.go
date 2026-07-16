@@ -9,7 +9,8 @@ import (
 
 	"github.com/ElioNeto/vyx/core/domain/infra"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 func planS3Bucket(desired, current *infra.Resource) (*infra.ResourceChange, error) {
@@ -56,8 +57,8 @@ func createS3Bucket(ctx context.Context, client *Client, r *infra.Resource) (*in
 	if getBoolProp(r.Properties, "versioning", false) {
 		_, err := client.S3.PutBucketVersioning(ctx, &s3.PutBucketVersioningInput{
 			Bucket: aws.String(bucketName),
-			VersioningConfiguration: &types.VersioningConfiguration{
-				Status: types.BucketVersioningStatusEnabled,
+			VersioningConfiguration: &s3types.VersioningConfiguration{
+				Status: s3types.BucketVersioningStatusEnabled,
 			},
 		})
 		if err != nil {
@@ -102,13 +103,13 @@ func updateS3Bucket(ctx context.Context, client *Client, desired, current *infra
 	desiredVersioning := getBoolProp(desired.Properties, "versioning", false)
 	currentVersioning := getBoolProp(current.Properties, "versioning", false)
 	if desiredVersioning != currentVersioning {
-		status := types.BucketVersioningStatusSuspended
+		status := s3types.BucketVersioningStatusSuspended
 		if desiredVersioning {
-			status = types.BucketVersioningStatusEnabled
+			status = s3types.BucketVersioningStatusEnabled
 		}
 		_, err := client.S3.PutBucketVersioning(ctx, &s3.PutBucketVersioningInput{
 			Bucket: aws.String(bucketName),
-			VersioningConfiguration: &types.VersioningConfiguration{
+			VersioningConfiguration: &s3types.VersioningConfiguration{
 				Status: status,
 			},
 		})

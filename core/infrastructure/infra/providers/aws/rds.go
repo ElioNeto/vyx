@@ -8,6 +8,8 @@ import (
 	"fmt"
 
 	"github.com/ElioNeto/vyx/core/domain/infra"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/rds"
 )
 
 func planRDSInstance(desired, current *infra.Resource) (*infra.ResourceChange, error) {

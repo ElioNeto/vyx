@@ -180,6 +180,57 @@ func (p *Provider) Capabilities() []infra.ResourceCapability {
 			},
 			OutputFields: []string{"id", "arn", "default_network_acl_id", "default_security_group_id"},
 		},
+		{
+			Type:        "aws_sqs_queue",
+			Description: "Amazon SQS queue",
+			InputSchema: map[string]infra.SchemaField{
+				"name":               {Type: "string", Required: true, Description: "Queue name"},
+				"fifo_queue":         {Type: "bool", Required: false, Default: false, Description: "FIFO queue"},
+				"visibility_timeout": {Type: "number", Required: false, Default: 30, Description: "Visibility timeout in seconds"},
+				"delay_seconds":      {Type: "number", Required: false, Default: 0, Description: "Delay in seconds"},
+				"message_retention":  {Type: "number", Required: false, Default: 345600, Description: "Message retention in seconds"},
+			},
+			OutputFields: []string{"arn", "url"},
+		},
+		{
+			Type:        "aws_sns_topic",
+			Description: "Amazon SNS topic",
+			InputSchema: map[string]infra.SchemaField{
+				"name":     {Type: "string", Required: true, Description: "Topic name"},
+				"fifo_topic": {Type: "bool", Required: false, Default: false, Description: "FIFO topic"},
+			},
+			OutputFields: []string{"arn"},
+		},
+		{
+			Type:        "aws_route53_zone",
+			Description: "Amazon Route53 hosted zone",
+			InputSchema: map[string]infra.SchemaField{
+				"name": {Type: "string", Required: true, Description: "Domain name (e.g. example.com)"},
+			},
+			OutputFields: []string{"id", "arn", "name_servers"},
+		},
+		{
+			Type:        "aws_elasticache_cluster",
+			Description: "Amazon ElastiCache cluster",
+			InputSchema: map[string]infra.SchemaField{
+				"cluster_id":       {Type: "string", Required: true, Description: "Cluster identifier"},
+				"engine":           {Type: "string", Required: true, Description: "Engine (redis or memcached)"},
+				"node_type":        {Type: "string", Required: true, Description: "Node type (e.g. cache.t3.micro)"},
+				"num_cache_nodes":  {Type: "number", Required: false, Default: 1, Description: "Number of cache nodes"},
+				"engine_version":   {Type: "string", Required: false, Description: "Engine version"},
+			},
+			OutputFields: []string{"id", "arn", "configuration_endpoint", "port"},
+		},
+		{
+			Type:        "aws_api_gateway_rest_api",
+			Description: "Amazon API Gateway REST API",
+			InputSchema: map[string]infra.SchemaField{
+				"name":        {Type: "string", Required: true, Description: "API name"},
+				"description": {Type: "string", Required: false, Description: "API description"},
+				"version":     {Type: "string", Required: false, Default: "v1", Description: "API version"},
+			},
+			OutputFields: []string{"id", "arn", "root_resource_id"},
+		},
 	}
 }
 
@@ -199,6 +250,16 @@ func (p *Provider) planResource(ctx context.Context, desired, current *infra.Res
 		return planLambdaFunction(desired, current)
 	case "aws_vpc":
 		return planVPC(desired, current)
+	case "aws_sqs_queue":
+		return planSQSQueue(desired, current)
+	case "aws_sns_topic":
+		return planSNSTopic(desired, current)
+	case "aws_route53_zone":
+		return planRoute53Zone(desired, current)
+	case "aws_elasticache_cluster":
+		return planElastiCacheCluster(desired, current)
+	case "aws_api_gateway_rest_api":
+		return planAPIGateway(desired, current)
 	default:
 		return nil, &infra.ErrValidation{
 			ResourceID: desired.ID,
@@ -221,6 +282,16 @@ func (p *Provider) createResource(ctx context.Context, r *infra.Resource) (*infr
 		return createLambdaFunction(ctx, p.client, r)
 	case "aws_vpc":
 		return createVPC(ctx, p.client, r)
+	case "aws_sqs_queue":
+		return createSQSQueue(ctx, p.client, r)
+	case "aws_sns_topic":
+		return createSNSTopic(ctx, p.client, r)
+	case "aws_route53_zone":
+		return createRoute53Zone(ctx, p.client, r)
+	case "aws_elasticache_cluster":
+		return createElastiCacheCluster(ctx, p.client, r)
+	case "aws_api_gateway_rest_api":
+		return createAPIGateway(ctx, p.client, r)
 	default:
 		return nil, &infra.ErrValidation{
 			ResourceID: r.ID,
@@ -243,6 +314,16 @@ func (p *Provider) readResource(ctx context.Context, r *infra.Resource) (*infra.
 		return readLambdaFunction(ctx, p.client, r)
 	case "aws_vpc":
 		return readVPC(ctx, p.client, r)
+	case "aws_sqs_queue":
+		return readSQSQueue(ctx, p.client, r)
+	case "aws_sns_topic":
+		return readSNSTopic(ctx, p.client, r)
+	case "aws_route53_zone":
+		return readRoute53Zone(ctx, p.client, r)
+	case "aws_elasticache_cluster":
+		return readElastiCacheCluster(ctx, p.client, r)
+	case "aws_api_gateway_rest_api":
+		return readAPIGateway(ctx, p.client, r)
 	default:
 		return nil, &infra.ErrValidation{
 			ResourceID: r.ID,
@@ -265,6 +346,16 @@ func (p *Provider) updateResource(ctx context.Context, desired, current *infra.R
 		return updateLambdaFunction(ctx, p.client, desired, current)
 	case "aws_vpc":
 		return updateVPC(ctx, p.client, desired, current)
+	case "aws_sqs_queue":
+		return updateSQSQueue(ctx, p.client, desired, current)
+	case "aws_sns_topic":
+		return updateSNSTopic(ctx, p.client, desired, current)
+	case "aws_route53_zone":
+		return updateRoute53Zone(ctx, p.client, desired, current)
+	case "aws_elasticache_cluster":
+		return updateElastiCacheCluster(ctx, p.client, desired, current)
+	case "aws_api_gateway_rest_api":
+		return updateAPIGateway(ctx, p.client, desired, current)
 	default:
 		return nil, &infra.ErrValidation{
 			ResourceID: desired.ID,
@@ -287,6 +378,16 @@ func (p *Provider) deleteResource(ctx context.Context, r *infra.Resource) error 
 		return deleteLambdaFunction(ctx, p.client, r)
 	case "aws_vpc":
 		return deleteVPC(ctx, p.client, r)
+	case "aws_sqs_queue":
+		return deleteSQSQueue(ctx, p.client, r)
+	case "aws_sns_topic":
+		return deleteSNSTopic(ctx, p.client, r)
+	case "aws_route53_zone":
+		return deleteRoute53Zone(ctx, p.client, r)
+	case "aws_elasticache_cluster":
+		return deleteElastiCacheCluster(ctx, p.client, r)
+	case "aws_api_gateway_rest_api":
+		return deleteAPIGateway(ctx, p.client, r)
 	default:
 		return &infra.ErrValidation{
 			ResourceID: r.ID,

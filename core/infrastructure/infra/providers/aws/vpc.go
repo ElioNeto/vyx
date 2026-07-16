@@ -8,6 +8,9 @@ import (
 	"fmt"
 
 	"github.com/ElioNeto/vyx/core/domain/infra"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 )
 
 func planVPC(desired, current *infra.Resource) (*infra.ResourceChange, error) {
@@ -46,11 +49,9 @@ func createVPC(ctx context.Context, client *Client, r *infra.Resource) (*infra.R
 	created := r.Clone()
 	created.State = infra.ResourceStateCreated
 	created.Outputs = map[string]string{
-		"id":                         vpcID,
-		"arn":                        fmt.Sprintf("arn:aws:ec2:%s:%s:vpc/%s", client.Region(), "", vpcID),
-		"default_network_acl_id":     aws.ToString(result.Vpc.DefaultNetworkAclId),
-		"default_security_group_id":  aws.ToString(result.Vpc.DefaultSecurityGroupId),
-		"cidr_block":                 cidr,
+		"id":         vpcID,
+		"arn":        fmt.Sprintf("arn:aws:ec2:%s:%s:vpc/%s", client.Region(), "", vpcID),
+		"cidr_block": cidr,
 	}
 	return created, nil
 }

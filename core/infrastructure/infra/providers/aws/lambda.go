@@ -8,6 +8,9 @@ import (
 	"fmt"
 
 	"github.com/ElioNeto/vyx/core/domain/infra"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/lambda"
+	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
 func planLambdaFunction(desired, current *infra.Resource) (*infra.ResourceChange, error) {
@@ -48,12 +51,12 @@ func createLambdaFunction(ctx context.Context, client *Client, r *infra.Resource
 	// For now, this is a scaffold that requires a pre-uploaded package.
 	result, err := client.Lambda.CreateFunction(ctx, &lambda.CreateFunctionInput{
 		FunctionName: aws.String(funcName),
-		Runtime:      lambda.Runtime(runtime),
+		Runtime:      lambdatypes.Runtime(runtime),
 		Handler:      aws.String(handler),
 		Role:         aws.String(roleARN),
 		MemorySize:   aws.Int32(memory),
 		Timeout:      aws.Int32(timeout),
-		Code:         &lambda.FunctionCode{}, // must provide S3Bucket/S3Key or ZipFile
+		Code:         &lambdatypes.FunctionCode{}, // must provide S3Bucket/S3Key or ZipFile
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create Lambda function %q: %w", funcName, err)

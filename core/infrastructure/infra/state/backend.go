@@ -17,8 +17,7 @@ func NewBackend(cfg infra.BackendConfig) (infra.Backend, error) {
 		return NewLocalBackend(path)
 
 	case "s3":
-		// S3 backend will be implemented in Phase 2.
-		return nil, fmt.Errorf("s3 backend not yet implemented — use local backend")
+		return newS3Backend(cfg)
 
 	case "consul":
 		// Consul backend will be implemented in Phase 3.
@@ -32,3 +31,5 @@ func NewBackend(cfg infra.BackendConfig) (infra.Backend, error) {
 		return nil, fmt.Errorf("unknown backend type %q", cfg.Type)
 	}
 }
+
+
