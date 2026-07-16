@@ -33,9 +33,9 @@ func runBuild(args []string) {
 			fmt.Println("\U0001f50d vyx build: scanning infrastructure annotations...")
 			infraErrs, err := scanner.GenerateInfra(*infraDir, *infraOutput)
 			if len(infraErrs) > 0 {
-				for _, e := range infraErrs {
-					fmt.Fprintf(os.Stderr, "  warning: %s\n", e)
-				}
+			for _, e := range infraErrs {
+				fmt.Fprintf(os.Stderr, "  warning: %v\n", e)
+			}
 			}
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: infra scan failed: %v\n", err)

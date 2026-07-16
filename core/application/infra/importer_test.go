@@ -158,3 +158,85 @@ func TestImporterNoProvider(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no provider found")
 }
+
+func TestStateManagerRefresh(t *testing.T) {
+	ctx := context.Background()
+	reg, backend, cleanup := setupTestInfra(t)
+	defer cleanup()
+
+	// Create and apply a resource so it has outputs
+	mockProvider, _ := reg.Get("mock")
+	r := infra.NewResource("bucket-1", "mock_resource", "mock")
+	created, err := mockProvider.Create(ctx, r)
+	require.NoError(t, err)
+
+	// Save state
+	state := infra.NewState("test")
+	state.Resources = append(state.Resources, created)
+	require.NoError(t, backend.Put(ctx, state))
+
+	// Refresh
+	sm := NewStateManager(backend)
+	err = sm.Refresh(ctx, reg)
+	require.NoError(t, err)
+
+	// Verify state still has the resource
+	resources, err := sm.ListResources(ctx)
+	require.NoError(t, err)
+	assert.Len(t, resources, 1)
+}
+
+func TestDiscoverResources(t *testing.T) {
+	ctx := context.Background()
+	reg, backend, cleanup := setupTestInfra(t)
+	defer cleanup()
+
+	// Create a resource in the mock provider
+	mockProvider, _ := reg.Get("mock")
+	_, err := mockProvider.Create(ctx, infra.NewResource("existing-resource", "mock_resource", "mock"))
+	require.NoError(t, err)
+
+	im := NewImporter(reg, backend)
+
+	// Discover resources of type mock_resource
+	resources, err := im.DiscoverResources(ctx, "mock_resource")
+	require.NoError(t, err)
+	assert.Len(t, resources, 1)
+	assert.Equal(t, infra.ResourceID("existing-resource"), resources[0].ID)
+}
+
+func TestDiscoverResources_AlreadyManaged(t *testing.T) {
+	ctx := context.Background()
+	reg, backend, cleanup := setupTestInfra(t)
+	defer cleanup()
+
+	// Create a resource in the mock provider
+	mockProvider, _ := reg.Get("mock")
+	_, err := mockProvider.Create(ctx, infra.NewResource("managed-resource", "mock_resource", "mock"))
+	require.NoError(t, err)
+
+	// And it's already in the state
+	state := infra.NewState("test")
+	state.Resources = append(state.Resources, infra.NewResource("managed-resource", "mock_resource", "mock"))
+	require.NoError(t, backend.Put(ctx, state))
+
+	im := NewImporter(reg, backend)
+
+	// Discover — should be empty since the resource is already managed
+	resources, err := im.DiscoverResources(ctx, "mock_resource")
+	require.NoError(t, err)
+	assert.Empty(t, resources)
+}
+
+func TestDiscoverResources_NoProvider(t *testing.T) {
+	ctx := context.Background()
+	_, backend, cleanup := setupTestInfra(t)
+	defer cleanup()
+
+	reg := infra.NewProviderRegistry() // empty registry
+	im := NewImporter(reg, backend)
+
+	resources, err := im.DiscoverResources(ctx, "unknown_type")
+	require.NoError(t, err)
+	assert.Empty(t, resources)
+}

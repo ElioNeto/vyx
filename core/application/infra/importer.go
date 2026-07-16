@@ -101,11 +101,59 @@ func (im *Importer) Import(ctx context.Context, resourceType infra.ResourceType,
 }
 
 // DiscoverResources lists all resources of a given type that exist in the cloud
-// but are not yet managed by the state.
-func (im *Importer) DiscoverResources(ctx context.Context, resourceType infra.ResourceType) ([]infra.ResourceID, error) {
-	// For now, returns a placeholder. Full discovery requires provider-specific
-	// listing APIs (e.g., S3 ListBuckets, EC2 DescribeInstances).
-	return nil, fmt.Errorf("resource discovery not yet implemented for type %q", resourceType)
+// but are not yet managed by the state. Requires provider support for listing.
+func (im *Importer) DiscoverResources(ctx context.Context, resourceType infra.ResourceType) ([]*infra.Resource, error) {
+	var results []*infra.Resource
+
+	for _, pid := range im.registry.List() {
+		p, err := im.registry.Get(pid)
+		if err != nil {
+			continue
+		}
+
+		// Check if the provider supports this resource type
+		supported := false
+		for _, cap := range p.Capabilities() {
+			if cap.Type == resourceType {
+				supported = true
+				break
+			}
+		}
+		if !supported {
+			continue
+		}
+
+		// Try provider-specific listing via Lister interface
+		if lister, ok := p.(interface {
+			List(ctx context.Context, resourceType infra.ResourceType) ([]*infra.Resource, error)
+		}); ok {
+			resources, err := lister.List(ctx, resourceType)
+			if err != nil {
+				continue
+			}
+			results = append(results, resources...)
+		}
+	}
+
+	// Filter out resources already managed in state
+	currentState, err := im.backend.Get(ctx)
+	if err != nil || currentState == nil {
+		return results, nil
+	}
+
+	managed := make(map[infra.ResourceID]bool)
+	for _, r := range currentState.Resources {
+		managed[r.ID] = true
+	}
+
+	var unmanaged []*infra.Resource
+	for _, r := range results {
+		if !managed[r.ID] {
+			unmanaged = append(unmanaged, r)
+		}
+	}
+
+	return unmanaged, nil
 }
 
 // StateManager handles state-level operations.

@@ -1,0 +1,93 @@
+name: Infrastructure Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'core/domain/infra/**'
+      - 'core/application/infra/**'  
+      - 'core/infrastructure/infra/**'
+      - 'scanner/infra_parser*'
+      - 'cmd/vyx/*.go'
+      - '.github/workflows/infra.yml'
+
+jobs:
+  unit:
+    name: Infra Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: core/go.sum
+      
+      - name: Domain tests
+        run: go test ./core/domain/infra/... -race -count=1 -coverprofile=coverage-domain.txt
+        working-directory: ./core
+      
+      - name: Application tests
+        run: go test ./core/application/infra/... -race -count=1 -coverprofile=coverage-app.txt
+        working-directory: ./core
+      
+      - name: State backend tests
+        run: go test ./core/infrastructure/infra/state/... -race -count=1 -coverprofile=coverage-state.txt
+        working-directory: ./core
+      
+      - name: Templater tests
+        run: go test ./core/infrastructure/infra/templater/... -race -count=1 -coverprofile=coverage-templater.txt
+        working-directory: ./core
+      
+      - name: Scanner tests
+        run: go test ./scanner/... -race -count=1 -coverprofile=coverage-scanner.txt
+      
+      - name: Vet check
+        run: go vet ./core/domain/infra/...
+
+  build:
+    name: Infra Build Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: core/go.sum
+      
+      - name: Build without tags
+        run: go build ./cmd/vyx/...
+      
+      - name: Build with AWS tag
+        run: go build -tags with_aws ./core/infrastructure/infra/...
+        working-directory: ./core
+      
+      - name: CLI infra vet
+        run: go vet ./cmd/vyx/...
+
+  integration:
+    name: Infra Integration Tests
+    runs-on: ubuntu-latest
+    services:
+      localstack:
+        image: localstack/localstack:latest
+        ports:
+          - 4566:4566
+        env:
+          SERVICES: s3,dynamodb,ec2
+          DEFAULT_REGION: us-east-1
+          DEBUG: 0
+        options: >-
+          --health-cmd "curl -f http://localhost:4566/_localstack/health"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: core/go.sum
+      
+      - name: Run integration tests
+        run: go test -tags integration ./core/integration/infra/... -v -count=1

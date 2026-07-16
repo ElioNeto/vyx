@@ -296,3 +296,15 @@ func (m *MockProvider) Delete(_ context.Context, r *Resource) error {
 func (m *MockProvider) Capabilities() []ResourceCapability {
 	return m.capabilities
 }
+
+// List returns all resources of a given type that the mock provider manages.
+// This supports the DiscoverResources workflow.
+func (m *MockProvider) List(ctx context.Context, resourceType ResourceType) ([]*Resource, error) {
+	var results []*Resource
+	for _, r := range m.resources {
+		if r.Type == resourceType {
+			results = append(results, r.Clone())
+		}
+	}
+	return results, nil
+}
